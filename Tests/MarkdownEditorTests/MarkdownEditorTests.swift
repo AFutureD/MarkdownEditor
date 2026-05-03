@@ -271,6 +271,153 @@ private typealias TestFont = UIFont
     #expect(controller.source == "```swift\nlet y = 2\n```")
 }
 
+@Test func codeBlockPreviewRendersAttachmentInsteadOfTextPlaceholder() {
+    let source = """
+    ```swift
+    let x = 1
+    ```
+    """
+    let presentation = MarkdownRenderer().render(document: MarkdownDocument(source: source))
+    let block = presentation.blocks.first { $0.kind == .codeBlock }!
+    let codeObject = block.codeBlock!
+
+    #expect(block.mode == .objectPreview)
+    #expect(!presentation.attributedString.string.contains("[Code object"))
+    #expect(presentation.attributedString.string.hasPrefix("\u{fffc}"))
+    #expect(codeObject.language == "swift")
+    #expect(codeObject.codeContent == "let x = 1")
+    #expect(codeObject.sourceReplacement(forEditedContent: "let y = 2") == "let y = 2\n")
+    #expect(presentation.visibleOffsetToSource(codeObject.visibleRange.location) == 0)
+    #expect(presentation.sourceOffsetToVisible(utf16Offset(in: source, of: "let x")) == codeObject.visibleRange.location + 1)
+    #expect(presentation.sourceOffsetToVisible(source.utf16.count) == block.visibleRange.upperBound)
+    #expect(presentation.activeScope(containingVisibleOffset: block.visibleRange.upperBound) == nil)
+
+    #if canImport(UIKit) || canImport(AppKit)
+    let attachment = presentation.attributedString.attribute(
+        .attachment,
+        at: codeObject.visibleRange.location,
+        effectiveRange: nil
+    ) as? MarkdownCodeBlockAttachment
+    #expect(attachment?.presentation == codeObject)
+    #endif
+}
+
+@Test func activeCodeBlockStaysObjectEditingInsteadOfRawFenceSource() {
+    var document = MarkdownDocument(source: "Intro\n\n```swift\nlet x = 1\n```\n")
+    let code = document.blocks.first { $0.kind == .codeBlock }!
+
+    document.activeScope = .codeBlock(code.id)
+    let presentation = MarkdownRenderer().render(document: document)
+    let block = presentation.blocks.first { $0.kind == .codeBlock }!
+
+    #expect(block.mode == .objectEditing)
+    #expect(block.codeBlock?.mode == .objectEditing)
+    #expect(!presentation.attributedString.string.contains("```swift"))
+    #expect(presentation.attributedString.string.contains("\u{fffc}"))
+}
+
+@Test @MainActor func codeObjectEditKeepsClosingFenceSeparateFromFollowingBlocks() {
+    let source = """
+    ```swift
+    let x = 1
+    ```
+
+    Tail paragraph
+    """
+    let controller = MarkdownEditorController(source: source)
+    let code = controller.firstBlock(kind: .codeBlock)!
+    let codeObject = controller.presentation.blocks.first { $0.kind == .codeBlock }!.codeBlock!
+
+    controller.replaceCodeContent(blockID: code.id, with: codeObject.sourceReplacement(forEditedContent: "let y = 2"))
+
+    #expect(controller.source.contains("let y = 2\n```"))
+    #expect(controller.source.contains("Tail paragraph"))
+    #expect(controller.document.blocks.contains { $0.kind == .paragraph })
+}
+
+@Test @MainActor func outerVisibleEditCannotModifyCodeBlockFence() {
+    let source = """
+    ```swift
+    let x = 1
+    ```
+
+    Tail paragraph
+    """
+    let controller = MarkdownEditorController(source: source)
+    let code = controller.firstBlock(kind: .codeBlock)!
+    _ = controller.activate(scope: .codeBlock(code.id), preservingSourceOffset: code.sourceRange.location)
+    let codeBlockPresentation = controller.presentation.blocks.first { $0.kind == .codeBlock }!
+    let newlineAfterObject = NSRange(location: codeBlockPresentation.visibleRange.upperBound - 1, length: 0)
+
+    let result = controller.replaceVisible(range: newlineAfterObject, with: "`")
+
+    #expect(result == nil)
+    #expect(controller.source == source)
+}
+
+@Test @MainActor func outerVisibleEditCanAppendAfterTrailingCodeBlock() {
+    let source = """
+    ```swift
+    let x = 1
+    ```
+    """
+    let controller = MarkdownEditorController(source: source)
+    let code = controller.firstBlock(kind: .codeBlock)!
+    _ = controller.activate(scope: .codeBlock(code.id), preservingSourceOffset: code.sourceRange.location)
+    let codeBlockPresentation = controller.presentation.blocks.first { $0.kind == .codeBlock }!
+    let trailingInsertion = NSRange(location: codeBlockPresentation.visibleRange.upperBound, length: 0)
+
+    let result = controller.replaceVisible(range: trailingInsertion, with: "\n")
+
+    #expect(result != nil)
+    #expect(controller.source == "```swift\nlet x = 1\n```\n")
+    #expect(controller.activeScope == nil)
+
+    let continuationOffset = controller.visibleOffset(forSourceOffset: result?.selectionSourceOffset ?? 0)
+    _ = controller.activate(atVisibleOffset: continuationOffset)
+    #expect(controller.activeScope == nil)
+    let continuationResult = controller.replaceVisible(
+        range: NSRange(location: continuationOffset, length: 0),
+        with: "Tail paragraph"
+    )
+
+    #expect(continuationResult != nil)
+    #expect(controller.source == "```swift\nlet x = 1\n```\nTail paragraph")
+    #expect(controller.document.blocks.contains { $0.kind == .paragraph })
+}
+
+@Test @MainActor func outerVisibleTextAppendAfterTrailingCodeBlockStartsNewLine() {
+    let source = """
+    ```swift
+    let x = 1
+    ```
+    """
+    let controller = MarkdownEditorController(source: source)
+    let codeBlockPresentation = controller.presentation.blocks.first { $0.kind == .codeBlock }!
+    let trailingInsertion = NSRange(location: codeBlockPresentation.visibleRange.upperBound, length: 0)
+
+    let result = controller.replaceVisible(range: trailingInsertion, with: "Tail paragraph")
+
+    #expect(result != nil)
+    #expect(controller.source == "```swift\nlet x = 1\n```\nTail paragraph")
+    #expect(controller.activeScope == nil)
+    #expect(controller.document.blocks.contains { $0.kind == .paragraph })
+}
+
+@Test @MainActor func codeLanguageEditPreservesContentAndClosingFence() {
+    let source = """
+    ```swift
+    let x = 1
+    ```
+    """
+    let controller = MarkdownEditorController(source: source)
+    let code = controller.firstBlock(kind: .codeBlock)!
+
+    controller.updateCodeLanguage(blockID: code.id, language: "python")
+
+    #expect(controller.source == "```python\nlet x = 1\n```")
+}
+
 private func utf16Offset(in string: String, of needle: String) -> Int {
     let range = string.range(of: needle)!
     return string.utf16.distance(from: string.utf16.startIndex, to: range.lowerBound.samePosition(in: string.utf16)!)

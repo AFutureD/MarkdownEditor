@@ -29,6 +29,7 @@ public struct MarkdownBlockPresentation: Identifiable, Equatable {
     public var sourceRange: MarkdownSourceRange
     public var visibleRange: NSRange
     public var mappingSegments: [MarkdownMappingSegment]
+    public var codeBlock: MarkdownCodeBlockPresentation?
 
     public init(
         blockID: String,
@@ -37,7 +38,8 @@ public struct MarkdownBlockPresentation: Identifiable, Equatable {
         mode: MarkdownDisplayMode,
         sourceRange: MarkdownSourceRange,
         visibleRange: NSRange,
-        mappingSegments: [MarkdownMappingSegment]
+        mappingSegments: [MarkdownMappingSegment],
+        codeBlock: MarkdownCodeBlockPresentation? = nil
     ) {
         self.id = blockID
         self.blockID = blockID
@@ -47,6 +49,52 @@ public struct MarkdownBlockPresentation: Identifiable, Equatable {
         self.sourceRange = sourceRange
         self.visibleRange = visibleRange
         self.mappingSegments = mappingSegments
+        self.codeBlock = codeBlock
+    }
+}
+
+public struct MarkdownCodeBlockPresentation: Equatable {
+    public var blockID: String
+    public var mode: MarkdownDisplayMode
+    public var sourceRange: MarkdownSourceRange
+    public var visibleRange: NSRange
+    public var language: String
+    public var codeContent: String
+    public var codeContentRange: MarkdownSourceRange
+    public var estimatedHeight: CGFloat
+    public var hasClosingFence: Bool
+
+    public init(
+        blockID: String,
+        mode: MarkdownDisplayMode,
+        sourceRange: MarkdownSourceRange,
+        visibleRange: NSRange,
+        language: String,
+        codeContent: String,
+        codeContentRange: MarkdownSourceRange,
+        estimatedHeight: CGFloat,
+        hasClosingFence: Bool
+    ) {
+        self.blockID = blockID
+        self.mode = mode
+        self.sourceRange = sourceRange
+        self.visibleRange = visibleRange
+        self.language = language
+        self.codeContent = codeContent
+        self.codeContentRange = codeContentRange
+        self.estimatedHeight = estimatedHeight
+        self.hasClosingFence = hasClosingFence
+    }
+
+    public var displayLanguage: String {
+        language.isEmpty ? "plain text" : language
+    }
+
+    public func sourceReplacement(forEditedContent editedContent: String) -> String {
+        guard hasClosingFence, !editedContent.isEmpty else {
+            return editedContent
+        }
+        return editedContent + "\n"
     }
 }
 
@@ -88,6 +136,10 @@ public struct MarkdownPresentation {
     }
 
     public func activeScope(containingVisibleOffset offset: Int) -> MarkdownActiveScope? {
+        if isTrailingBoundaryOfCodeBlock(offset) {
+            return nil
+        }
+
         guard let block = blockPresentation(containingVisibleOffset: offset) else {
             return nil
         }
@@ -119,6 +171,15 @@ public struct MarkdownPresentation {
         }
     }
 
+    private func isTrailingBoundaryOfCodeBlock(_ offset: Int) -> Bool {
+        guard blocks.contains(where: { $0.kind == .codeBlock && $0.visibleRange.upperBound == offset }) else {
+            return false
+        }
+        return !blocks.contains { presentation in
+            presentation.visibleRange.location == offset
+        }
+    }
+
     private func mapVisibleOffset(_ offset: Int, in block: MarkdownBlockPresentation) -> Int {
         for segment in block.mappingSegments {
             if offset >= segment.visibleRange.location && offset <= segment.visibleRange.location + segment.visibleRange.length {
@@ -141,6 +202,10 @@ public struct MarkdownPresentation {
     }
 
     private func mapSourceOffset(_ offset: Int, in block: MarkdownBlockPresentation) -> Int {
+        if offset >= block.sourceRange.upperBound {
+            return block.visibleRange.location + block.visibleRange.length
+        }
+
         for segment in block.mappingSegments {
             if offset >= segment.sourceRange.location && offset <= segment.sourceRange.upperBound {
                 let delta = min(offset - segment.sourceRange.location, segment.visibleRange.length)
@@ -151,10 +216,6 @@ public struct MarkdownPresentation {
         if offset <= block.sourceRange.location {
             return block.visibleRange.location
         }
-        if offset >= block.sourceRange.upperBound {
-            return block.visibleRange.location + block.visibleRange.length
-        }
-
         let nearest = block.mappingSegments.min { lhs, rhs in
             abs(lhs.sourceRange.location - offset) < abs(rhs.sourceRange.location - offset)
         }
@@ -180,7 +241,7 @@ public struct MarkdownRenderer: Sendable {
             case .sourceEditing:
                 renderSource(block: block, source: source, builder: builder)
             case .objectPreview, .objectEditing:
-                renderObject(block: block, source: source, builder: builder)
+                renderObject(block: block, mode: mode, source: source, builder: builder)
             case .preview:
                 renderPreview(block: block, source: source, builder: builder)
             }
@@ -206,6 +267,9 @@ private extension MarkdownRenderer {
         case .table:
             return .objectPreview
         case .codeBlock:
+            if case .codeBlock(let id) = activeScope, id == block.id {
+                return .objectEditing
+            }
             return .objectPreview
         case .list:
             if case .listGroup(let id) = activeScope, id == block.listGroupID {
@@ -240,7 +304,7 @@ private extension MarkdownRenderer {
         case .blank:
             renderSource(block: block, source: source, builder: builder)
         case .table, .codeBlock:
-            renderObject(block: block, source: source, builder: builder)
+            renderObject(block: block, mode: .objectPreview, source: source, builder: builder)
         }
     }
 
@@ -354,7 +418,12 @@ private extension MarkdownRenderer {
         renderInline(sourceText: text, sourceBaseOffset: block.contentRange.location, builder: builder, baseAttributes: attributes)
     }
 
-    func renderObject(block: MarkdownBlock, source: String, builder: PresentationBuilder) {
+    func renderObject(block: MarkdownBlock, mode: MarkdownDisplayMode, source: String, builder: PresentationBuilder) {
+        if block.kind == .codeBlock, let code = block.code {
+            renderCodeObject(block: block, code: code, mode: mode, source: source, builder: builder)
+            return
+        }
+
         let label: String
         let details: String
         switch block.kind {
@@ -364,10 +433,6 @@ private extension MarkdownRenderer {
             let columnCount = table?.columns.count ?? 0
             label = "Table object"
             details = "\(columnCount) columns, \(rowCount) rows"
-        case .codeBlock:
-            label = "Code object"
-            let language = block.code?.language.isEmpty == false ? block.code!.language : "plain text"
-            details = language
         default:
             label = "Object"
             details = block.kind.rawValue
@@ -379,6 +444,60 @@ private extension MarkdownRenderer {
             sourceRange: block.sourceRange,
             visibleRange: NSRange(location: start, length: builder.length - start)
         )
+    }
+
+    func renderCodeObject(
+        block: MarkdownBlock,
+        code: MarkdownCodeBlock,
+        mode: MarkdownDisplayMode,
+        source: String,
+        builder: PresentationBuilder
+    ) {
+        let start = builder.length
+        let visibleRange = NSRange(location: start, length: 1)
+        let sourceCodeContent = substring(source, range: code.codeContentRange)
+        let hasClosingFence = code.codeContentRange.upperBound < block.sourceRange.upperBound
+        let codeContent = displayCodeContent(sourceCodeContent, hasClosingFence: hasClosingFence)
+        let presentation = MarkdownCodeBlockPresentation(
+            blockID: block.id,
+            mode: mode,
+            sourceRange: block.sourceRange,
+            visibleRange: visibleRange,
+            language: code.language,
+            codeContent: codeContent,
+            codeContentRange: code.codeContentRange,
+            estimatedHeight: estimatedCodeBlockHeight(for: codeContent),
+            hasClosingFence: hasClosingFence
+        )
+
+        #if canImport(UIKit) || canImport(AppKit)
+        builder.append(NSAttributedString(attachment: MarkdownCodeBlockAttachment(presentation: presentation)))
+        builder.append("\n", attributes: bodyAttributes())
+        #else
+        builder.append("\u{fffc}\n", attributes: objectAttributes())
+        #endif
+
+        builder.setCodeBlockPresentation(presentation)
+        builder.addMapping(sourceRange: block.sourceRange, visibleRange: visibleRange)
+    }
+
+    func displayCodeContent(_ sourceCodeContent: String, hasClosingFence: Bool) -> String {
+        guard hasClosingFence else {
+            return sourceCodeContent
+        }
+        if sourceCodeContent.hasSuffix("\r\n") {
+            return String(sourceCodeContent.dropLast(2))
+        }
+        if sourceCodeContent.hasSuffix("\n") {
+            return String(sourceCodeContent.dropLast())
+        }
+        return sourceCodeContent
+    }
+
+    func estimatedCodeBlockHeight(for codeContent: String) -> CGFloat {
+        let lineCount = max(1, MarkdownLine.scan(codeContent).count)
+        let contentHeight = CGFloat(lineCount) * 20 + 16
+        return max(84, min(420, 36 + contentHeight))
     }
 
     func renderInline(
@@ -536,6 +655,7 @@ private extension MarkdownRenderer {
 private final class PresentationBuilder {
     private let storage = NSMutableAttributedString()
     private var currentMappings: [MarkdownMappingSegment] = []
+    private var currentCodeBlockPresentation: MarkdownCodeBlockPresentation?
     private(set) var blocks: [MarkdownBlockPresentation] = []
 
     var length: Int {
@@ -559,6 +679,10 @@ private final class PresentationBuilder {
         currentMappings.append(MarkdownMappingSegment(sourceRange: sourceRange, visibleRange: visibleRange))
     }
 
+    func setCodeBlockPresentation(_ presentation: MarkdownCodeBlockPresentation) {
+        currentCodeBlockPresentation = presentation
+    }
+
     func finishBlock(
         blockID: String,
         listGroupID: String?,
@@ -575,12 +699,38 @@ private final class PresentationBuilder {
                 mode: mode,
                 sourceRange: sourceRange,
                 visibleRange: visibleRange,
-                mappingSegments: currentMappings
+                mappingSegments: currentMappings,
+                codeBlock: currentCodeBlockPresentation
             )
         )
         currentMappings.removeAll(keepingCapacity: true)
+        currentCodeBlockPresentation = nil
     }
 }
+
+#if canImport(UIKit) || canImport(AppKit)
+public final class MarkdownCodeBlockAttachment: NSTextAttachment {
+    public private(set) var presentation: MarkdownCodeBlockPresentation?
+
+    public init(presentation: MarkdownCodeBlockPresentation) {
+        self.presentation = presentation
+        super.init(data: nil, ofType: nil)
+        updateHeight(presentation.estimatedHeight)
+    }
+
+    public required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+
+    public func updateHeight(_ height: CGFloat) {
+        bounds = CGRect(x: 0, y: 0, width: 1, height: ceil(height))
+        if var presentation {
+            presentation.estimatedHeight = ceil(height)
+            self.presentation = presentation
+        }
+    }
+}
+#endif
 
 private extension MarkdownRenderer {
     struct ListMarker {

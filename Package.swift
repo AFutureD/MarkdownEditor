@@ -22,6 +22,8 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-markdown.git", from: "0.7.3"),
+        .package(url: "https://github.com/simonbs/Runestone.git", from: "0.4.1"),
+        .package(url: "https://github.com/simonbs/TreeSitterLanguages.git", from: "0.0.3"),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -30,6 +32,11 @@ let package = Package(
             name: "MarkdownEditor",
             dependencies: [
                 .product(name: "Markdown", package: "swift-markdown"),
+                .product(name: "Runestone", package: "Runestone", condition: .when(platforms: [.iOS])),
+                .product(name: "TreeSitterJavaScriptRunestone", package: "TreeSitterLanguages", condition: .when(platforms: [.iOS])),
+                .product(name: "TreeSitterJSONRunestone", package: "TreeSitterLanguages", condition: .when(platforms: [.iOS])),
+                .product(name: "TreeSitterPythonRunestone", package: "TreeSitterLanguages", condition: .when(platforms: [.iOS])),
+                .product(name: "TreeSitterSwiftRunestone", package: "TreeSitterLanguages", condition: .when(platforms: [.iOS])),
             ]
         ),
         .testTarget(

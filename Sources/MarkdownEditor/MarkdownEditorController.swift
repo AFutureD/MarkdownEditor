@@ -52,20 +52,43 @@ public final class MarkdownEditorController: ObservableObject {
     }
 
     public func replaceVisible(range: NSRange, with replacement: String) -> MarkdownEditResult? {
-        guard let activeScope = document.activeScope,
-              let activePresentation = activePresentation(for: activeScope),
-              visibleRange(range, isContainedIn: activePresentation.visibleRange) else {
+        let activeScope = document.activeScope
+        let targetPresentation: MarkdownBlockPresentation
+        let isTrailingCodeBlockInsertion: Bool
+
+        if let activeScope,
+           let presentation = activePresentation(for: activeScope) {
+            targetPresentation = presentation
+            isTrailingCodeBlockInsertion = activeScope.isCodeBlock
+                && range.length == 0
+                && range.location == targetPresentation.visibleRange.upperBound
+        } else if let presentation = trailingCodeBlockPresentation(for: range) {
+            targetPresentation = presentation
+            isTrailingCodeBlockInsertion = true
+        } else {
+            return nil
+        }
+
+        guard visibleRange(range, isContainedIn: targetPresentation.visibleRange),
+              activeScope?.isCodeBlock != true || isTrailingCodeBlockInsertion else {
             return nil
         }
 
         let sourceStart = presentation.visibleOffsetToSource(range.location)
         let sourceEnd = presentation.visibleOffsetToSource(range.location + range.length)
         let sourceRange = MarkdownSourceRange(location: sourceStart, length: max(0, sourceEnd - sourceStart))
-        let result = rewriter.replace(source: document.source, range: sourceRange, with: replacement)
+        let adjustedReplacement = replacementForTrailingCodeBlockInsertion(
+            replacement,
+            sourceRange: sourceRange,
+            blockPresentation: targetPresentation,
+            isTrailingCodeBlockInsertion: isTrailingCodeBlockInsertion
+        )
+        let result = rewriter.replace(source: document.source, range: sourceRange, with: adjustedReplacement)
         replaceDocumentSource(
             result.source,
-            preferredActiveScope: activeScope,
-            fallbackSourceOffset: result.selectionSourceOffset
+            preferredActiveScope: isTrailingCodeBlockInsertion ? nil : activeScope,
+            fallbackSourceOffset: isTrailingCodeBlockInsertion ? nil : result.selectionSourceOffset,
+            preserveExistingActiveScope: !isTrailingCodeBlockInsertion
         )
         return result
     }
@@ -113,6 +136,15 @@ public final class MarkdownEditorController: ObservableObject {
     }
 }
 
+private extension MarkdownActiveScope {
+    var isCodeBlock: Bool {
+        if case .codeBlock = self {
+            return true
+        }
+        return false
+    }
+}
+
 private extension MarkdownEditorController {
     func rebuildPresentation() {
         presentation = renderer.render(document: document)
@@ -121,9 +153,10 @@ private extension MarkdownEditorController {
     func replaceDocumentSource(
         _ source: String,
         preferredActiveScope: MarkdownActiveScope?,
-        fallbackSourceOffset: Int? = nil
+        fallbackSourceOffset: Int? = nil,
+        preserveExistingActiveScope: Bool = true
     ) {
-        let activeScope = preferredActiveScope ?? document.activeScope
+        let activeScope = preferredActiveScope ?? (preserveExistingActiveScope ? document.activeScope : nil)
         document = MarkdownDocument(source: source, parser: parser)
         document.activeScope = restoreActiveScope(activeScope) ?? fallbackActiveScope(containingSourceOffset: fallbackSourceOffset)
         rebuildPresentation()
@@ -160,7 +193,58 @@ private extension MarkdownEditorController {
         }
     }
 
+    func trailingCodeBlockPresentation(for range: NSRange) -> MarkdownBlockPresentation? {
+        guard range.length == 0 else { return nil }
+        return presentation.blocks.first { presentation in
+            presentation.kind == .codeBlock && range.location == presentation.visibleRange.upperBound
+        }
+    }
+
+    func replacementForTrailingCodeBlockInsertion(
+        _ replacement: String,
+        sourceRange: MarkdownSourceRange,
+        blockPresentation: MarkdownBlockPresentation,
+        isTrailingCodeBlockInsertion: Bool
+    ) -> String {
+        guard isTrailingCodeBlockInsertion,
+              !replacement.isEmpty,
+              sourceRange.length == 0,
+              sourceRange.location == blockPresentation.sourceRange.upperBound,
+              !sourceHasLineBreak(beforeUTF16Offset: sourceRange.location),
+              !replacementStartsWithLineBreak(replacement) else {
+            return replacement
+        }
+        return "\n" + replacement
+    }
+
+    func sourceHasLineBreak(beforeUTF16Offset offset: Int) -> Bool {
+        guard offset > 0,
+              let index = String.Index(utf16Offset: offset - 1, in: document.source) else {
+            return false
+        }
+        return document.source[index] == "\n" || document.source[index] == "\r"
+    }
+
+    func replacementStartsWithLineBreak(_ replacement: String) -> Bool {
+        guard let first = replacement.first else { return false }
+        return first == "\n" || first == "\r"
+    }
+
     func visibleRange(_ range: NSRange, isContainedIn container: NSRange) -> Bool {
         range.location >= container.location && range.location + range.length <= container.location + container.length
+    }
+}
+
+private extension String.Index {
+    init?(utf16Offset: Int, in string: String) {
+        guard let utf16Index = string.utf16.index(
+            string.utf16.startIndex,
+            offsetBy: utf16Offset,
+            limitedBy: string.utf16.endIndex
+        ),
+        let index = utf16Index.samePosition(in: string) else {
+            return nil
+        }
+        self = index
     }
 }

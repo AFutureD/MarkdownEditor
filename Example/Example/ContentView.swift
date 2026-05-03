@@ -57,15 +57,6 @@ final class HybridEditorDemoView: UIView {
         rootStack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(rootStack)
 
-        let titleLabel = UILabel()
-        titleLabel.text = "Hybrid Markdown"
-        titleLabel.font = .preferredFont(forTextStyle: .title2).withTraits(.traitBold)
-        titleLabel.textAlignment = .center
-        titleLabel.adjustsFontForContentSizeCategory = true
-        titleLabel.accessibilityTraits = .header
-        titleLabel.setContentHuggingPriority(.required, for: .vertical)
-
-        let toolbar = makeToolbar()
         let sourcePanel = makeSourcePanel()
 
         editorView.accessibilityIdentifier = "HybridMarkdownEditorContainer"
@@ -73,8 +64,6 @@ final class HybridEditorDemoView: UIView {
             self?.sourceTextView.text = source
         }
 
-        rootStack.addArrangedSubview(titleLabel)
-        rootStack.addArrangedSubview(toolbar)
         rootStack.addArrangedSubview(editorView)
         rootStack.addArrangedSubview(sourcePanel)
 
@@ -83,58 +72,10 @@ final class HybridEditorDemoView: UIView {
             rootStack.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor),
             rootStack.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor),
             rootStack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            titleLabel.heightAnchor.constraint(equalToConstant: 54),
-            toolbar.heightAnchor.constraint(equalToConstant: 68),
             sourcePanel.heightAnchor.constraint(equalToConstant: 220),
         ])
 
         refresh()
-    }
-
-    private func makeToolbar() -> UIView {
-        let container = UIView()
-        container.backgroundColor = .secondarySystemBackground
-
-        let stack = UIStackView()
-        stack.axis = .horizontal
-        stack.alignment = .center
-        stack.distribution = .fillEqually
-        stack.spacing = 10
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(stack)
-
-        let activateListButton = makeButton(title: "Activate\nList", identifier: "ActivateListButton", action: #selector(activateFirstList))
-        let updateTableButton = makeButton(title: "Update\nTable", identifier: "UpdateTableButton", action: #selector(updateTable))
-        updateTableButton.configuration = .filled()
-        updateTableButton.configuration?.title = "Update\nTable"
-        let replaceCodeButton = makeButton(title: "Replace\nCode", identifier: "ReplaceCodeButton", action: #selector(replaceCode))
-        let previewButton = makeButton(title: "Preview", identifier: "PreviewButton", action: #selector(preview))
-
-        stack.addArrangedSubview(activateListButton)
-        stack.addArrangedSubview(updateTableButton)
-        stack.addArrangedSubview(replaceCodeButton)
-        stack.addArrangedSubview(previewButton)
-
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
-            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
-            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
-            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8),
-        ])
-
-        return container
-    }
-
-    private func makeButton(title: String, identifier: String, action: Selector) -> UIButton {
-        var configuration = UIButton.Configuration.bordered()
-        configuration.title = title
-        configuration.titleAlignment = .center
-        let button = UIButton(configuration: configuration)
-        button.titleLabel?.numberOfLines = 2
-        button.titleLabel?.textAlignment = .center
-        button.accessibilityIdentifier = identifier
-        button.addTarget(self, action: action, for: .touchUpInside)
-        return button
     }
 
     private func makeSourcePanel() -> UIView {
@@ -168,37 +109,6 @@ final class HybridEditorDemoView: UIView {
         ])
 
         return container
-    }
-
-    @objc private func activateFirstList() {
-        guard let list = controller.firstBlock(kind: .list),
-              let scope = list.activeScope else {
-            return
-        }
-        _ = controller.activate(scope: scope, preservingSourceOffset: list.sourceRange.location)
-        editorView.applyPresentation(selectedSourceOffset: list.sourceRange.location)
-        refresh()
-    }
-
-    @objc private func updateTable() {
-        guard let table = controller.firstBlock(kind: .table) else {
-            return
-        }
-        controller.updateTableCell(blockID: table.id, row: 1, column: 1, text: "AXe verified")
-        refresh()
-    }
-
-    @objc private func replaceCode() {
-        guard let code = controller.firstBlock(kind: .codeBlock) else {
-            return
-        }
-        controller.replaceCodeContent(blockID: code.id, with: "let status = \"AXe verified\"\nprint(status)\n")
-        refresh()
-    }
-
-    @objc private func preview() {
-        controller.deactivate()
-        refresh()
     }
 
     private static let sampleMarkdown = """
@@ -239,6 +149,10 @@ final class HybridEditorDemoView: UIView {
     let status = "Preview"
     print(status)
     ```
+
+    ```unknown-language
+    this stays editable as plain text fallback
+    ```
     """
 }
 
@@ -254,4 +168,3 @@ private extension UIFont {
 #Preview {
     ContentView()
 }
-
