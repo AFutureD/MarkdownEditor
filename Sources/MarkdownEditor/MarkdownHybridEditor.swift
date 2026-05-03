@@ -4,20 +4,17 @@ import Foundation
 import SwiftUI
 import UIKit
 
-#if canImport(Runestone)
 import Runestone
 import TreeSitterJavaScriptRunestone
 import TreeSitterJSONRunestone
 import TreeSitterPythonRunestone
 import TreeSitterSwiftRunestone
-#endif
 
 /// Preview-only hit target for the code body.
 ///
-/// The embedded Runestone/UITextView is not interactive while a code block is
-/// rendered as an object preview. Leaving it interactive would let its own text
-/// gestures compete with the outer editor and with block activation. This clear
-/// control gives preview taps a deterministic activation target.
+/// Runestone stays configured the same way in preview and editing modes; the
+/// wrapper uses this clear control to make preview taps activate the block
+/// before text editing begins.
 private final class CodeBlockActivationOverlay: UIControl {
     var onActivate: (() -> Void)?
 
@@ -472,13 +469,9 @@ private final class CodeBlockObjectView: UIControl, UITextFieldDelegate {
     private let languageField = UITextField()
     private let copyButton = UIButton(type: .system)
     private let activationOverlay = CodeBlockActivationOverlay()
-    #if canImport(Runestone)
     private let codeView = TextView(frame: .zero)
     private let theme = DefaultTheme()
     private var appliedRunestoneLanguage: String?
-    #else
-    private let codeView = UITextView(frame: .zero)
-    #endif
     private var presentation: MarkdownCodeBlockPresentation?
     private var isUpdatingState = false
 
@@ -507,12 +500,8 @@ private final class CodeBlockObjectView: UIControl, UITextFieldDelegate {
         activationOverlay.isHidden = isEditing
         activationOverlay.isUserInteractionEnabled = !isEditing
         activationOverlay.isAccessibilityElement = !isEditing
-        #if canImport(Runestone)
         codeView.isEditable = isEditing
-        codeView.isSelectable = isEditing
-        // Preview mode renders plain code text; language-backed Runestone state
-        // is deferred until editing so Tree-sitter setup happens on demand.
-        let language = isEditing ? presentation.language : ""
+        let language = runestoneLanguageIdentifier(for: presentation)
         if codeView.text == presentation.codeContent,
            appliedRunestoneLanguage == language {
             // The user may have just typed this text; avoid resetting state and moving the caret.
@@ -520,14 +509,6 @@ private final class CodeBlockObjectView: UIControl, UITextFieldDelegate {
             codeView.setState(runestoneState(text: presentation.codeContent, language: language))
             appliedRunestoneLanguage = language
         }
-        #else
-        codeView.isEditable = isEditing
-        codeView.isSelectable = isEditing
-        if codeView.text != presentation.codeContent {
-            codeView.text = presentation.codeContent
-        }
-        #endif
-        codeView.isUserInteractionEnabled = isEditing
 
         setActiveAppearance(isEditing)
         isUpdatingState = false
@@ -573,9 +554,8 @@ private final class CodeBlockObjectView: UIControl, UITextFieldDelegate {
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard bounds.contains(point) else { return nil }
-        // In preview mode, route code-body taps to the overlay instead of the
-        // disabled code view. In editing mode the overlay is hidden, so Runestone
-        // receives text interaction normally.
+        // In preview mode, route code-body taps to the overlay. In editing mode
+        // the overlay is hidden, so Runestone receives text interaction normally.
         if presentation?.mode != .objectEditing, codeView.frame.contains(point) {
             let overlayPoint = convert(point, to: activationOverlay)
             return activationOverlay.hitTest(overlayPoint, with: event) ?? activationOverlay
@@ -606,19 +586,11 @@ private final class CodeBlockObjectView: UIControl, UITextFieldDelegate {
     }
 
     func focusEditor() {
-        #if canImport(Runestone)
         _ = codeView.becomeFirstResponder()
-        #else
-        _ = codeView.becomeFirstResponder()
-        #endif
     }
 
     private var currentCodeText: String {
-        #if canImport(Runestone)
         codeView.text
-        #else
-        codeView.text ?? ""
-        #endif
     }
 
     private func configure() {
@@ -647,7 +619,7 @@ private final class CodeBlockObjectView: UIControl, UITextFieldDelegate {
         copyButton.addTarget(self, action: #selector(copyCode), for: .touchUpInside)
         headerView.addSubview(copyButton)
 
-        #if canImport(Runestone)
+        _ = Self.prepareRunestoneLanguages
         codeView.editorDelegate = self
         codeView.theme = theme
         codeView.backgroundColor = .clear
@@ -665,20 +637,8 @@ private final class CodeBlockObjectView: UIControl, UITextFieldDelegate {
         codeView.smartDashesType = .no
         codeView.smartQuotesType = .no
         codeView.spellCheckingType = .no
-        #else
-        codeView.delegate = self
-        codeView.backgroundColor = .clear
-        codeView.isScrollEnabled = false
-        codeView.alwaysBounceVertical = false
-        codeView.showsVerticalScrollIndicator = false
-        codeView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
-        codeView.textContainerInset = UIEdgeInsets(top: 8, left: 6, bottom: 6, right: 6)
-        codeView.autocorrectionType = .no
-        codeView.autocapitalizationType = .none
-        codeView.smartDashesType = .no
-        codeView.smartQuotesType = .no
-        codeView.spellCheckingType = .no
-        #endif
+        codeView.isEditable = false
+        codeView.isSelectable = true
         addSubview(codeView)
 
         activationOverlay.backgroundColor = .clear
@@ -708,25 +668,82 @@ private final class CodeBlockObjectView: UIControl, UITextFieldDelegate {
         })
     }
 
-    #if canImport(Runestone)
+    private func runestoneLanguageIdentifier(
+        for presentation: MarkdownCodeBlockPresentation
+    ) -> String {
+        Self.normalizedRunestoneLanguageIdentifier(presentation.language) ?? ""
+    }
+
+    private static func normalizedRunestoneLanguageIdentifier(_ language: String) -> String? {
+        switch language.lowercased() {
+        case "swift":
+            "swift"
+        case "javascript", "js":
+            "javascript"
+        case "json":
+            "json"
+        case "python", "py":
+            "python"
+        default:
+            nil
+        }
+    }
+
     private func runestoneState(text: String, language: String) -> TextViewState {
         switch language.lowercased() {
         case "swift":
-            TextViewState(text: text, theme: theme, language: .swift)
+            Self.prepareRunestoneLanguage("swift")
+            return TextViewState(text: text, theme: theme, language: Self.swiftRunestoneLanguage)
         case "javascript", "js":
-            TextViewState(text: text, theme: theme, language: .javaScript)
+            Self.prepareRunestoneLanguage("javascript")
+            return TextViewState(text: text, theme: theme, language: Self.javaScriptRunestoneLanguage)
         case "json":
-            TextViewState(text: text, theme: theme, language: .json)
+            Self.prepareRunestoneLanguage("json")
+            return TextViewState(text: text, theme: theme, language: Self.jsonRunestoneLanguage)
         case "python", "py":
-            TextViewState(text: text, theme: theme, language: .python)
+            Self.prepareRunestoneLanguage("python")
+            return TextViewState(text: text, theme: theme, language: Self.pythonRunestoneLanguage)
         default:
-            TextViewState(text: text, theme: theme)
+            return TextViewState(text: text, theme: theme)
         }
     }
-    #endif
+
+    private static let swiftRunestoneLanguage = TreeSitterLanguage.swift
+    private static let javaScriptRunestoneLanguage = TreeSitterLanguage.javaScript
+    private static let jsonRunestoneLanguage = TreeSitterLanguage.json
+    private static let pythonRunestoneLanguage = TreeSitterLanguage.python
+
+    private static let prepareRunestoneLanguages: Void = {
+        let languages = ["swift", "javascript", "json", "python"]
+        DispatchQueue.global(qos: .utility).async {
+            for language in languages {
+                prepareRunestoneLanguage(language)
+            }
+        }
+    }()
+
+    private static let runestoneLanguagePreparationLock = NSLock()
+
+    private static func prepareRunestoneLanguage(_ language: String) {
+        runestoneLanguagePreparationLock.lock()
+        defer {
+            runestoneLanguagePreparationLock.unlock()
+        }
+        switch language {
+        case "swift":
+            swiftRunestoneLanguage.prepare()
+        case "javascript":
+            javaScriptRunestoneLanguage.prepare()
+        case "json":
+            jsonRunestoneLanguage.prepare()
+        case "python":
+            pythonRunestoneLanguage.prepare()
+        default:
+            break
+        }
+    }
 }
 
-#if canImport(Runestone)
 extension CodeBlockObjectView: @preconcurrency TextViewDelegate {
     func textViewShouldBeginEditing(_ textView: TextView) -> Bool {
         guard let presentation else { return false }
@@ -744,25 +761,6 @@ extension CodeBlockObjectView: @preconcurrency TextViewDelegate {
         onContentChange?(presentation.blockID, presentation.sourceReplacement(forEditedContent: textView.text))
     }
 }
-#else
-extension CodeBlockObjectView: @preconcurrency UITextViewDelegate {
-    func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
-        guard let presentation else { return false }
-        guard presentation.mode != .objectEditing else { return true }
-        activate()
-        return false
-    }
-
-    func textViewDidChange(_ textView: UITextView) {
-        guard !isUpdatingState,
-              textView.markedTextRange == nil,
-              let presentation else {
-            return
-        }
-        onContentChange?(presentation.blockID, presentation.sourceReplacement(forEditedContent: textView.text))
-    }
-}
-#endif
 
 public struct MarkdownHybridEditor: UIViewRepresentable {
     private let coordinator: MarkdownEditorCoordinator
