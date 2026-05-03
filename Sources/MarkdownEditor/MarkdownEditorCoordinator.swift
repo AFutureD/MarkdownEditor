@@ -2,7 +2,7 @@ import Combine
 import Foundation
 
 @MainActor
-public final class MarkdownEditorController: ObservableObject {
+public final class MarkdownEditorCoordinator: ObservableObject {
     @Published public private(set) var document: MarkdownDocument
     @Published public private(set) var presentation: MarkdownPresentation
 
@@ -31,46 +31,24 @@ public final class MarkdownEditorController: ObservableObject {
     public func activate(atVisibleOffset visibleOffset: Int) -> Int {
         let sourceOffset = presentation.visibleOffsetToSource(visibleOffset)
         let newScope = presentation.activeScope(containingVisibleOffset: visibleOffset)
-        guard newScope != document.activeScope else {
+        guard setActiveScope(newScope) else {
             return visibleOffset
         }
-        document.activeScope = newScope
-        rebuildPresentation()
         return presentation.sourceOffsetToVisible(sourceOffset)
     }
 
     @discardableResult
     public func activate(scope: MarkdownActiveScope?, preservingSourceOffset sourceOffset: Int? = nil) -> Int {
-        document.activeScope = scope
-        rebuildPresentation()
+        _ = setActiveScope(scope)
         return presentation.sourceOffsetToVisible(sourceOffset ?? 0)
     }
 
     public func deactivate() {
-        document.activeScope = nil
-        rebuildPresentation()
+        _ = setActiveScope(nil)
     }
 
     public func replaceVisible(range: NSRange, with replacement: String) -> MarkdownEditResult? {
-        let activeScope = document.activeScope
-        let targetPresentation: MarkdownBlockPresentation
-        let isTrailingCodeBlockInsertion: Bool
-
-        if let activeScope,
-           let presentation = activePresentation(for: activeScope) {
-            targetPresentation = presentation
-            isTrailingCodeBlockInsertion = activeScope.isCodeBlock
-                && range.length == 0
-                && range.location == targetPresentation.visibleRange.upperBound
-        } else if let presentation = trailingCodeBlockPresentation(for: range) {
-            targetPresentation = presentation
-            isTrailingCodeBlockInsertion = true
-        } else {
-            return nil
-        }
-
-        guard visibleRange(range, isContainedIn: targetPresentation.visibleRange),
-              activeScope?.isCodeBlock != true || isTrailingCodeBlockInsertion else {
+        guard let target = visibleEditTarget(for: range) else {
             return nil
         }
 
@@ -80,51 +58,35 @@ public final class MarkdownEditorController: ObservableObject {
         let adjustedReplacement = replacementForTrailingCodeBlockInsertion(
             replacement,
             sourceRange: sourceRange,
-            blockPresentation: targetPresentation,
-            isTrailingCodeBlockInsertion: isTrailingCodeBlockInsertion
+            blockPresentation: target.presentation,
+            isTrailingCodeBlockInsertion: target.isTrailingCodeBlockInsertion
         )
         let result = rewriter.replace(source: document.source, range: sourceRange, with: adjustedReplacement)
         replaceDocumentSource(
             result.source,
-            preferredActiveScope: isTrailingCodeBlockInsertion ? nil : activeScope,
-            fallbackSourceOffset: isTrailingCodeBlockInsertion ? nil : result.selectionSourceOffset,
-            preserveExistingActiveScope: !isTrailingCodeBlockInsertion
+            preferredActiveScope: target.isTrailingCodeBlockInsertion ? nil : target.activeScope,
+            fallbackSourceOffset: target.isTrailingCodeBlockInsertion ? nil : result.selectionSourceOffset,
+            preserveExistingActiveScope: !target.isTrailingCodeBlockInsertion
         )
         return result
     }
 
     public func replaceCodeContent(blockID: String, with replacement: String) {
-        guard let block = document.block(id: blockID) else { return }
-        let result = rewriter.replaceCodeContent(source: document.source, block: block, with: replacement)
-        replaceDocumentSource(result.source, preferredActiveScope: .codeBlock(blockID))
+        replaceBlockSource(blockID: blockID, restoring: .codeBlock(blockID)) { block in
+            rewriter.replaceCodeContent(source: document.source, block: block, with: replacement)
+        }
     }
 
     public func updateCodeLanguage(blockID: String, language: String) {
-        guard let block = document.block(id: blockID) else { return }
-        let result = rewriter.updateCodeLanguage(source: document.source, block: block, language: language)
-        replaceDocumentSource(result.source, preferredActiveScope: .codeBlock(blockID))
+        replaceBlockSource(blockID: blockID, restoring: .codeBlock(blockID)) { block in
+            rewriter.updateCodeLanguage(source: document.source, block: block, language: language)
+        }
     }
 
     public func updateTableCell(blockID: String, row: Int, column: Int, text: String) {
-        guard let block = document.block(id: blockID) else { return }
-        let result = rewriter.updateTableCell(source: document.source, block: block, row: row, column: column, text: text)
-        replaceDocumentSource(result.source, preferredActiveScope: .table(blockID))
-    }
-
-    public func insertTableRow(blockID: String, at row: Int, values: [String]) {
-        guard let block = document.block(id: blockID) else { return }
-        let result = rewriter.insertTableRow(source: document.source, block: block, at: row, values: values)
-        replaceDocumentSource(result.source, preferredActiveScope: .table(blockID))
-    }
-
-    public func deleteTableRow(blockID: String, at row: Int) {
-        guard let block = document.block(id: blockID) else { return }
-        let result = rewriter.deleteTableRow(source: document.source, block: block, at: row)
-        replaceDocumentSource(result.source, preferredActiveScope: .table(blockID))
-    }
-
-    public func firstBlock(kind: MarkdownBlockKind) -> MarkdownBlock? {
-        document.blocks.first { $0.kind == kind }
+        replaceBlockSource(blockID: blockID, restoring: .table(blockID)) { block in
+            rewriter.updateTableCell(source: document.source, block: block, row: row, column: column, text: text)
+        }
     }
 
     public func visibleOffset(forSourceOffset sourceOffset: Int) -> Int {
@@ -145,9 +107,23 @@ private extension MarkdownActiveScope {
     }
 }
 
-private extension MarkdownEditorController {
+private struct VisibleEditTarget {
+    var presentation: MarkdownBlockPresentation
+    var activeScope: MarkdownActiveScope?
+    var isTrailingCodeBlockInsertion: Bool
+}
+
+private extension MarkdownEditorCoordinator {
     func rebuildPresentation() {
         presentation = renderer.render(document: document)
+    }
+
+    @discardableResult
+    func setActiveScope(_ scope: MarkdownActiveScope?) -> Bool {
+        guard scope != document.activeScope else { return false }
+        document.activeScope = scope
+        rebuildPresentation()
+        return true
     }
 
     func replaceDocumentSource(
@@ -160,6 +136,15 @@ private extension MarkdownEditorController {
         document = MarkdownDocument(source: source, parser: parser)
         document.activeScope = restoreActiveScope(activeScope) ?? fallbackActiveScope(containingSourceOffset: fallbackSourceOffset)
         rebuildPresentation()
+    }
+
+    func replaceBlockSource(
+        blockID: String,
+        restoring activeScope: MarkdownActiveScope,
+        _ edit: (MarkdownBlock) -> MarkdownEditResult
+    ) {
+        guard let block = document.block(id: blockID) else { return }
+        replaceDocumentSource(edit(block).source, preferredActiveScope: activeScope)
     }
 
     func restoreActiveScope(_ scope: MarkdownActiveScope?) -> MarkdownActiveScope? {
@@ -191,6 +176,36 @@ private extension MarkdownEditorController {
         case .listGroup(let id):
             return presentation.blocks.first { $0.listGroupID == id }
         }
+    }
+
+    func visibleEditTarget(for range: NSRange) -> VisibleEditTarget? {
+        let activeScope = document.activeScope
+
+        if let activeScope,
+           let presentation = activePresentation(for: activeScope) {
+            let isTrailingCodeBlockInsertion = activeScope.isCodeBlock
+                && range.length == 0
+                && range.location == presentation.visibleRange.upperBound
+            guard visibleRange(range, isContainedIn: presentation.visibleRange),
+                  !activeScope.isCodeBlock || isTrailingCodeBlockInsertion else {
+                return nil
+            }
+            return VisibleEditTarget(
+                presentation: presentation,
+                activeScope: activeScope,
+                isTrailingCodeBlockInsertion: isTrailingCodeBlockInsertion
+            )
+        }
+
+        guard let presentation = trailingCodeBlockPresentation(for: range),
+              visibleRange(range, isContainedIn: presentation.visibleRange) else {
+            return nil
+        }
+        return VisibleEditTarget(
+            presentation: presentation,
+            activeScope: nil,
+            isTrailingCodeBlockInsertion: true
+        )
     }
 
     func trailingCodeBlockPresentation(for range: NSRange) -> MarkdownBlockPresentation? {

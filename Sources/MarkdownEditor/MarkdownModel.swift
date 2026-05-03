@@ -16,10 +16,6 @@ public struct MarkdownSourceRange: Equatable, Hashable, Sendable {
     public func contains(_ offset: Int) -> Bool {
         offset >= location && offset < upperBound
     }
-
-    public func contains(_ range: MarkdownSourceRange) -> Bool {
-        range.location >= location && range.upperBound <= upperBound
-    }
 }
 
 public enum MarkdownBlockKind: String, Equatable, Sendable {
@@ -44,13 +40,6 @@ public enum MarkdownActiveScope: Equatable, Sendable {
     case listGroup(String)
     case table(String)
     case codeBlock(String)
-
-    public var id: String {
-        switch self {
-        case .block(let id), .listGroup(let id), .table(let id), .codeBlock(let id):
-            id
-        }
-    }
 }
 
 public struct MarkdownCodeBlock: Equatable, Sendable {
@@ -132,26 +121,12 @@ public struct MarkdownBlock: Identifiable, Equatable, Sendable {
 public struct MarkdownDocument: Equatable {
     public private(set) var source: String
     public private(set) var blocks: [MarkdownBlock]
-    public private(set) var revision: Int
     public var activeScope: MarkdownActiveScope?
 
     public init(source: String, parser: MarkdownParser = MarkdownParser()) {
         self.source = source
         self.blocks = parser.parse(source)
-        self.revision = 0
         self.activeScope = nil
-    }
-
-    public mutating func replaceSource(range: MarkdownSourceRange, with replacement: String, parser: MarkdownParser = MarkdownParser()) {
-        let nsRange = NSRange(location: range.location, length: range.length)
-        guard let stringRange = Range(nsRange, in: source) else { return }
-        source.replaceSubrange(stringRange, with: replacement)
-        blocks = parser.parse(source)
-        revision += 1
-    }
-
-    public mutating func setActiveScope(_ scope: MarkdownActiveScope?) {
-        activeScope = scope
     }
 
     public func block(id: String) -> MarkdownBlock? {

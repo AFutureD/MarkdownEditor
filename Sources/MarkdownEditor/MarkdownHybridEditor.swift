@@ -34,7 +34,7 @@ private final class CodeBlockActivationOverlay: UIControl {
 
 @MainActor
 public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
-    public var controller: MarkdownEditorController {
+    public var coordinator: MarkdownEditorCoordinator {
         didSet {
             applyPresentation()
         }
@@ -58,8 +58,8 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
     private var scrollRestoreGeneration = 0
     private var codeBlockViews: [String: CodeBlockObjectView] = [:]
 
-    public init(controller: MarkdownEditorController) {
-        self.controller = controller
+    public init(coordinator: MarkdownEditorCoordinator) {
+        self.coordinator = coordinator
         self.textView = UITextView(frame: .zero, textContainer: nil)
         super.init(frame: .zero)
         configure()
@@ -73,8 +73,8 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
 
     public func applyPresentation(selectedSourceOffset: Int? = nil, preserveScrollPosition: Bool = true) {
         guard !isApplyingPresentation else { return }
-        let currentSourceOffset = selectedSourceOffset ?? controller.sourceOffset(forVisibleOffset: textView.selectedRange.location)
-        let needsTextUpdate = !textView.attributedText.isEqual(to: controller.presentation.attributedString)
+        let currentSourceOffset = selectedSourceOffset ?? coordinator.sourceOffset(forVisibleOffset: textView.selectedRange.location)
+        let needsTextUpdate = !textView.attributedText.isEqual(to: coordinator.presentation.attributedString)
         if !needsTextUpdate && selectedSourceOffset == nil {
             syncCodeBlockViews()
             syncOuterTextViewCaretVisibility()
@@ -89,7 +89,7 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
         isApplyingPresentation = true
         UIView.performWithoutAnimation {
             if needsTextUpdate {
-                textView.attributedText = controller.presentation.attributedString
+                textView.attributedText = coordinator.presentation.attributedString
             }
             let visibleOffset = outerSelectionVisibleOffset(forSourceOffset: currentSourceOffset)
             textView.selectedRange = NSRange(location: min(visibleOffset, textView.attributedText.length), length: 0)
@@ -113,13 +113,13 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
     }
 
     public func activateCodeBlock(blockID: String) {
-        guard let block = controller.document.block(id: blockID) else { return }
-        if controller.activeScope == .codeBlock(blockID) {
+        guard let block = coordinator.document.block(id: blockID) else { return }
+        if coordinator.activeScope == .codeBlock(blockID) {
             syncOuterTextViewCaretVisibility()
             focusCodeBlockEditor(blockID: blockID, scrollIntoView: false)
             return
         }
-        _ = controller.activate(scope: .codeBlock(blockID), preservingSourceOffset: block.sourceRange.location)
+        _ = coordinator.activate(scope: .codeBlock(blockID), preservingSourceOffset: block.sourceRange.location)
         applyPresentation(selectedSourceOffset: block.sourceRange.location, preserveScrollPosition: false)
         focusCodeBlockEditor(blockID: blockID, scrollIntoView: true)
     }
@@ -127,9 +127,9 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
     public func textViewDidChangeSelection(_ textView: UITextView) {
         guard textView === self.textView, !isApplyingPresentation, textView.markedTextRange == nil else { return }
         let selectedRange = textView.selectedRange
-        let sourceOffset = controller.sourceOffset(forVisibleOffset: selectedRange.location)
-        let newVisibleOffset = controller.activate(atVisibleOffset: selectedRange.location)
-        if newVisibleOffset != selectedRange.location || !textView.attributedText.isEqual(to: controller.presentation.attributedString) {
+        let sourceOffset = coordinator.sourceOffset(forVisibleOffset: selectedRange.location)
+        let newVisibleOffset = coordinator.activate(atVisibleOffset: selectedRange.location)
+        if newVisibleOffset != selectedRange.location || !textView.attributedText.isEqual(to: coordinator.presentation.attributedString) {
             applyPresentation(selectedSourceOffset: sourceOffset)
         }
     }
@@ -137,7 +137,7 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
     public func textViewDidEndEditing(_ textView: UITextView) {
         guard textView === self.textView else { return }
         guard !isTransferringFocusToCodeBlock else { return }
-        controller.deactivate()
+        coordinator.deactivate()
         applyPresentation()
     }
 
@@ -159,27 +159,27 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
         }
 
         guard !visibleRangeIntersectsCodeBlock(range) else {
-            _ = controller.activate(atVisibleOffset: range.location)
+            _ = coordinator.activate(atVisibleOffset: range.location)
             applyPresentation()
             return false
         }
 
-        let sourceStart = controller.sourceOffset(forVisibleOffset: range.location)
-        let sourceEnd = controller.sourceOffset(forVisibleOffset: range.location + range.length)
+        let sourceStart = coordinator.sourceOffset(forVisibleOffset: range.location)
+        let sourceEnd = coordinator.sourceOffset(forVisibleOffset: range.location + range.length)
 
-        _ = controller.activate(atVisibleOffset: range.location)
+        _ = coordinator.activate(atVisibleOffset: range.location)
 
-        let activeStart = controller.visibleOffset(forSourceOffset: sourceStart)
-        let activeEnd = controller.visibleOffset(forSourceOffset: sourceEnd)
+        let activeStart = coordinator.visibleOffset(forSourceOffset: sourceStart)
+        let activeEnd = coordinator.visibleOffset(forSourceOffset: sourceEnd)
         let activeRange = NSRange(location: activeStart, length: max(0, activeEnd - activeStart))
 
-        guard let result = controller.replaceVisible(range: activeRange, with: text) else {
+        guard let result = coordinator.replaceVisible(range: activeRange, with: text) else {
             applyPresentation()
             return false
         }
 
         applyPresentation(selectedSourceOffset: result.selectionSourceOffset)
-        onSourceChange?(controller.source)
+        onSourceChange?(coordinator.source)
         return false
     }
 
@@ -233,16 +233,11 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
 
 private extension MarkdownHybridEditorView {
     func syncCodeBlockViews() {
-        guard textView.attributedText.length == controller.presentation.attributedString.length else {
+        guard textView.attributedText.length == coordinator.presentation.attributedString.length else {
             return
         }
 
-        let presentations = controller.presentation.blocks.compactMap(\.codeBlock)
-        let liveIDs = Set(presentations.map(\.blockID))
-
-        for staleID in codeBlockViews.keys where !liveIDs.contains(staleID) {
-            codeBlockViews.removeValue(forKey: staleID)?.removeFromSuperview()
-        }
+        let presentations = codeBlockPresentations
 
         // Attachment heights still drive document layout when their object views
         // are offscreen, so keep sizing separate from expensive view creation.
@@ -260,11 +255,11 @@ private extension MarkdownHybridEditorView {
     // Runestone views are expensive to create and syntax-highlight. Keep them
     // mounted only for visible blocks plus the active editor.
     func syncVisibleCodeBlockViews(with presentations: [MarkdownCodeBlockPresentation]? = nil) {
-        guard textView.attributedText.length == controller.presentation.attributedString.length else {
+        guard textView.attributedText.length == coordinator.presentation.attributedString.length else {
             return
         }
 
-        let presentations = presentations ?? controller.presentation.blocks.compactMap(\.codeBlock)
+        let presentations = presentations ?? codeBlockPresentations
         let liveIDs = Set(presentations.map(\.blockID))
         for staleID in codeBlockViews.keys where !liveIDs.contains(staleID) {
             codeBlockViews.removeValue(forKey: staleID)?.removeFromSuperview()
@@ -293,15 +288,15 @@ private extension MarkdownHybridEditorView {
         }
         view.onContentChange = { [weak self] blockID, content in
             guard let self else { return }
-            controller.replaceCodeContent(blockID: blockID, with: content)
-            onSourceChange?(controller.source)
-            applyPresentation(selectedSourceOffset: controller.document.block(id: blockID)?.code?.codeContentRange.location)
+            coordinator.replaceCodeContent(blockID: blockID, with: content)
+            onSourceChange?(coordinator.source)
+            applyPresentation(selectedSourceOffset: coordinator.document.block(id: blockID)?.code?.codeContentRange.location)
         }
         view.onLanguageChange = { [weak self] blockID, language in
             guard let self else { return }
-            controller.updateCodeLanguage(blockID: blockID, language: language)
-            onSourceChange?(controller.source)
-            applyPresentation(selectedSourceOffset: controller.document.block(id: blockID)?.sourceRange.location)
+            coordinator.updateCodeLanguage(blockID: blockID, language: language)
+            onSourceChange?(coordinator.source)
+            applyPresentation(selectedSourceOffset: coordinator.document.block(id: blockID)?.sourceRange.location)
         }
         textView.addSubview(view)
         codeBlockViews[presentation.blockID] = view
@@ -321,13 +316,13 @@ private extension MarkdownHybridEditorView {
     }
 
     func layoutCodeBlockViews(presentations: [MarkdownCodeBlockPresentation]? = nil) {
-        guard textView.attributedText.length == controller.presentation.attributedString.length else {
+        guard textView.attributedText.length == coordinator.presentation.attributedString.length else {
             return
         }
 
         textView.layoutManager.ensureLayout(for: textView.textContainer)
         let width = codeBlockContentWidth
-        let presentations = presentations ?? visibleCodeBlockPresentations(in: controller.presentation.blocks.compactMap(\.codeBlock))
+        let presentations = presentations ?? visibleCodeBlockPresentations(in: codeBlockPresentations)
 
         for presentation in presentations {
             guard let view = codeBlockViews[presentation.blockID],
@@ -352,7 +347,7 @@ private extension MarkdownHybridEditorView {
     }
 
     func scrollCodeBlockToVisible(blockID: String) {
-        if let presentation = controller.presentation.blocks.first(where: { $0.blockID == blockID })?.codeBlock {
+        if let presentation = codeBlockPresentation(blockID: blockID) {
             let view = codeBlockViews[presentation.blockID] ?? makeCodeBlockView(for: presentation)
             view.isHidden = false
             view.update(presentation)
@@ -367,7 +362,7 @@ private extension MarkdownHybridEditorView {
 
         let targetRect = view.frame.insetBy(dx: 0, dy: -12)
         textView.scrollRectToVisible(targetRect, animated: false)
-        layoutCodeBlockViews(presentations: visibleCodeBlockPresentations(in: controller.presentation.blocks.compactMap(\.codeBlock)))
+        layoutCodeBlockViews(presentations: visibleCodeBlockPresentations(in: codeBlockPresentations))
     }
 
     func focusCodeBlockEditor(blockID: String, scrollIntoView: Bool) {
@@ -386,7 +381,7 @@ private extension MarkdownHybridEditorView {
 
     func visibleRangeIntersectsCodeBlock(_ range: NSRange) -> Bool {
         let target = NSRange(location: range.location, length: max(range.length, 1))
-        return controller.presentation.blocks.contains { presentation in
+        return coordinator.presentation.blocks.contains { presentation in
             guard presentation.kind == .codeBlock else { return false }
             return NSIntersectionRange(target, presentation.visibleRange).length > 0 || target.location == presentation.visibleRange.location
         }
@@ -395,11 +390,11 @@ private extension MarkdownHybridEditorView {
     func outerSelectionVisibleOffset(forSourceOffset sourceOffset: Int) -> Int {
         if let activeCodeBlockPresentation {
             if sourceOffset >= activeCodeBlockPresentation.sourceRange.upperBound {
-                return controller.visibleOffset(forSourceOffset: sourceOffset)
+                return coordinator.visibleOffset(forSourceOffset: sourceOffset)
             }
             return activeCodeBlockPresentation.visibleRange.location
         }
-        return controller.visibleOffset(forSourceOffset: sourceOffset)
+        return coordinator.visibleOffset(forSourceOffset: sourceOffset)
     }
 
     func syncOuterTextViewCaretVisibility() {
@@ -412,8 +407,21 @@ private extension MarkdownHybridEditorView {
     }
 
     var activeCodeBlockPresentation: MarkdownCodeBlockPresentation? {
-        guard case .codeBlock(let blockID) = controller.activeScope else { return nil }
-        return controller.presentation.blocks.first { $0.blockID == blockID }?.codeBlock
+        guard let blockID = activeCodeBlockID else { return nil }
+        return codeBlockPresentation(blockID: blockID)
+    }
+
+    var activeCodeBlockID: String? {
+        guard case .codeBlock(let blockID) = coordinator.activeScope else { return nil }
+        return blockID
+    }
+
+    var codeBlockPresentations: [MarkdownCodeBlockPresentation] {
+        coordinator.presentation.blocks.compactMap(\.codeBlock)
+    }
+
+    func codeBlockPresentation(blockID: String) -> MarkdownCodeBlockPresentation? {
+        coordinator.presentation.blocks.first { $0.blockID == blockID }?.codeBlock
     }
 
     func codeBlockAttachment(at location: Int) -> MarkdownCodeBlockAttachment? {
@@ -444,12 +452,7 @@ private extension MarkdownHybridEditorView {
 
         let glyphRange = textView.layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
         let characterRange = textView.layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
-        let activeBlockID: String?
-        if case .codeBlock(let blockID) = controller.activeScope {
-            activeBlockID = blockID
-        } else {
-            activeBlockID = nil
-        }
+        let activeBlockID = activeCodeBlockID
 
         return presentations.filter { presentation in
             presentation.blockID == activeBlockID
@@ -529,10 +532,6 @@ private final class CodeBlockObjectView: UIControl, UITextFieldDelegate {
         setActiveAppearance(isEditing)
         isUpdatingState = false
         setNeedsLayout()
-    }
-
-    func preferredHeight(for width: CGFloat) -> CGFloat {
-        Self.preferredHeight(for: presentation?.codeContent ?? currentCodeText, width: width)
     }
 
     static func preferredHeight(for text: String, width: CGFloat) -> CGFloat {
@@ -766,18 +765,18 @@ extension CodeBlockObjectView: @preconcurrency UITextViewDelegate {
 #endif
 
 public struct MarkdownHybridEditor: UIViewRepresentable {
-    private let controller: MarkdownEditorController
+    private let coordinator: MarkdownEditorCoordinator
 
-    public init(controller: MarkdownEditorController) {
-        self.controller = controller
+    public init(coordinator: MarkdownEditorCoordinator) {
+        self.coordinator = coordinator
     }
 
     public func makeUIView(context: Context) -> MarkdownHybridEditorView {
-        MarkdownHybridEditorView(controller: controller)
+        MarkdownHybridEditorView(coordinator: coordinator)
     }
 
     public func updateUIView(_ uiView: MarkdownHybridEditorView, context: Context) {
-        uiView.controller = controller
+        uiView.coordinator = coordinator
         uiView.applyPresentation()
     }
 }

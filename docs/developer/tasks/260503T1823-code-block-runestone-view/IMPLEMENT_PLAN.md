@@ -5,20 +5,20 @@
 
 ## 设计方向
 
-Code block 继续遵守 Markdown source 是唯一真实数据的原则。Runestone 只作为 iOS 上的 code block object view，负责展示、输入、selection、IME 和语法高亮；任何内容或语言修改都必须转换成 `MarkdownEditorController` 的 semantic edit，再由 `MarkdownRewriter` 改写目标 source range。
+Code block 继续遵守 Markdown source 是唯一真实数据的原则。Runestone 只作为 iOS 上的 code block object view，负责展示、输入、selection、IME 和语法高亮；任何内容或语言修改都必须转换成 `MarkdownEditorCoordinator` 的 semantic edit，再由 `MarkdownRewriter` 改写目标 source range。
 
 外层 Markdown editor 不再把 code block 展开成 raw fenced source，也不再用 `[Code object: ...]` 作为主要界面。`MarkdownRenderer` 需要把 code block 渲染为稳定的 attachment/object presentation：outer visible range 是 object placeholder，内部 code selection 和 code content offset 由 Runestone view 自己维护。
 
 ## 架构边界
 
-Runestone 集成应隔离在 iOS-only 层。核心 model、parser、renderer、controller、rewriter 保持跨平台可编译；macOS 或其他非 iOS target 使用 fallback，不直接依赖 Runestone package。
+Runestone 集成应隔离在 iOS-only 层。核心 model、parser、renderer、coordinator、rewriter 保持跨平台可编译；macOS 或其他非 iOS target 使用 fallback，不直接依赖 Runestone package。
 
 建议的职责划分：
 
 - `MarkdownRenderer`：决定 code block 的 object preview / object editing mode，并输出 object presentation metadata。
 - `MarkdownHybridEditorView`：管理 object view 生命周期、layout、focus 切换和 scroll 同步。
 - `RunestoneCodeBlockView`：承载代码展示与编辑，发出 content / language semantic callbacks。
-- `MarkdownEditorController` / `MarkdownRewriter`：继续作为 source edit 的唯一入口。
+- `MarkdownEditorCoordinator` / `MarkdownRewriter`：继续作为 source edit 的唯一入口。
 
 ## Presentation 设计
 
@@ -44,7 +44,7 @@ Code view 内部不独立滚动。Runestone 的内容高度应反馈给 outer at
 
 Presentation rebuild 后，editor view 对比当前 presentation 中的 code block attachment metadata 与已存在 view registry。已有 block ID 复用 view 并更新 state；新增 block 创建 view；消失的 block 移除 view、断开 callback、释放引用。
 
-内容编辑的更新路径是单向的：Runestone view 发出 semantic edit，controller 改写 Markdown source 并重建 presentation，editor view 再把新的 block state 同步回对应 view。同步过程中需要 reentrancy guard，避免 programmatic state update 被当成用户输入。
+内容编辑的更新路径是单向的：Runestone view 发出 semantic edit，coordinator 改写 Markdown source 并重建 presentation，editor view 再把新的 block state 同步回对应 view。同步过程中需要 reentrancy guard，避免 programmatic state update 被当成用户输入。
 
 高度更新不应该触发 source edit。Runestone view 内容尺寸变化后通知 editor view，editor view 更新对应 attachment bounds，invalidate outer text layout，然后重新定位所有可见 object views。此过程需要保留 scroll offset、outer selection 和 Runestone first responder。
 

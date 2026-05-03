@@ -11,7 +11,7 @@
 
 交付 Code Block object view 支持：Markdown code block 在预览状态和编辑状态都通过自定义 view 呈现，不再使用普通占位文本或 raw fenced source 作为主要交互界面。
 
-自定义 view 使用 Runestone 作为 iOS 代码编辑核心，提供代码文本展示、编辑、语法高亮、滚动和代码编辑器基础能力。Markdown source 仍然是唯一真实数据；Runestone view 只承载 code block 的可见状态和编辑交互，任何修改都必须通过 `MarkdownEditorController` 和 `MarkdownRewriter` 回写到 code block 的 source range。
+自定义 view 使用 Runestone 作为 iOS 代码编辑核心，提供代码文本展示、编辑、语法高亮、滚动和代码编辑器基础能力。Markdown source 仍然是唯一真实数据；Runestone view 只承载 code block 的可见状态和编辑交互，任何修改都必须通过 `MarkdownEditorCoordinator` 和 `MarkdownRewriter` 回写到 code block 的 source range。
 
 ## 期望能力
 
@@ -19,7 +19,7 @@
 - `MarkdownHybridEditorView` 可以管理 code block attachment view 的创建、移除、布局和刷新，使其跟随 `UITextView` 的 TextKit 布局和滚动。
 - Code block preview mode 使用自定义 Runestone-backed view 展示代码内容，支持语言显示、语法高亮、自动换行、不可内部滚动和复制代码。
 - Code block editing mode 使用同一套自定义 Runestone-backed view 进行编辑，支持更新代码内容和语言信息。
-- Code block view 的内容修改通过 semantic edit 发给 `MarkdownEditorController.replaceCodeContent(blockID:with:)`，语言修改通过 `MarkdownEditorController.updateCodeLanguage(blockID:language:)`，不直接修改 outer `UITextView.textStorage`。
+- Code block view 的内容修改通过 semantic edit 发给 `MarkdownEditorCoordinator.replaceCodeContent(blockID:with:)`，语言修改通过 `MarkdownEditorCoordinator.updateCodeLanguage(blockID:language:)`，不直接修改 outer `UITextView.textStorage`。
 - Code block view 的高度随内容变化更新，并触发 outer TextKit attachment relayout，不破坏滚动位置和当前 selection/focus。
 - Preview 与 editing 切换不会改变 Markdown source；只有用户实际修改代码内容或语言时才产生 source edit。
 - iOS 目标集成 Runestone Swift Package；由于 Runestone 当前是 iOS-oriented package，macOS 目标必须通过条件编译、平台隔离或明确 fallback 保持 package build 不被破坏。

@@ -44,7 +44,7 @@ TextKit 2 只负责显示、布局和交互承载
                 │
 ┌───────────────▼──────────────┐
 │ Editor Coordination Layer      │
-│ MarkdownEditorController      │
+│ MarkdownEditorCoordinator      │
 │ selection / focus / undo       │
 └───────────────┬──────────────┘
                 │
@@ -117,7 +117,7 @@ math / diagram	rendered object	object editor
 
 2.3 Editor Coordination Layer
 
-核心对象：MarkdownEditorController
+核心对象：MarkdownEditorCoordinator
 
 职责：
 
@@ -153,7 +153,6 @@ NSTextLayoutManager
 保存 block model
 保存 source range / visible range
 保存 range mapping
-保存当前 revision
 保存 active block / active list group 状态
 
 概念结构：
@@ -165,7 +164,6 @@ MarkdownDocument
     presentations
     sourceToVisible map
     visibleToSource map
-    revision
 
 每个 block 至少需要：
 
@@ -389,7 +387,7 @@ Markdown source:
 
 Object editor
     ↓ emits semantic block edit
-MarkdownEditorController
+MarkdownEditorCoordinator
     ↓
 MarkdownRewriter
     ↓

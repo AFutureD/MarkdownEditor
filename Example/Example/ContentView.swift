@@ -28,8 +28,8 @@ struct HybridEditorDemoRepresentable: UIViewRepresentable {
 
 @MainActor
 final class HybridEditorDemoView: UIView {
-    private let controller = MarkdownEditorController(source: HybridEditorDemoView.sampleMarkdown)
-    private lazy var editorView = MarkdownHybridEditorView(controller: controller)
+    private let coordinator = MarkdownEditorCoordinator(source: HybridEditorDemoView.sampleMarkdown)
+    private lazy var editorView = MarkdownHybridEditorView(coordinator: coordinator)
     private let sourceTextView = UITextView()
 
     override init(frame: CGRect) {
@@ -44,7 +44,7 @@ final class HybridEditorDemoView: UIView {
 
     func refresh() {
         editorView.applyPresentation()
-        sourceTextView.text = controller.source
+        sourceTextView.text = coordinator.source
     }
 
     private func configure() {

@@ -76,26 +76,6 @@ public struct MarkdownRewriter: Sendable {
         return replace(source: source, range: block.sourceRange, with: replacement)
     }
 
-    public func insertTableRow(source: String, block: MarkdownBlock, at row: Int, values: [String]) -> MarkdownEditResult {
-        guard var table = block.table else {
-            return MarkdownEditResult(source: source, selectionSourceOffset: block.sourceRange.upperBound)
-        }
-        let padded = paddedRow(values, columnCount: table.columns.count)
-        let index = max(0, min(row, table.rows.count))
-        table.rows.insert(padded, at: index)
-        let replacement = serialize(table: table)
-        return replace(source: source, range: block.sourceRange, with: replacement)
-    }
-
-    public func deleteTableRow(source: String, block: MarkdownBlock, at row: Int) -> MarkdownEditResult {
-        guard var table = block.table, table.rows.indices.contains(row) else {
-            return MarkdownEditResult(source: source, selectionSourceOffset: block.sourceRange.upperBound)
-        }
-        table.rows.remove(at: row)
-        let replacement = serialize(table: table)
-        return replace(source: source, range: block.sourceRange, with: replacement)
-    }
-
     public func serialize(table: MarkdownTable) -> String {
         let columnCount = max(table.columns.count, table.alignments.count, table.rows.map(\.count).max() ?? 0)
         let columns = paddedRow(table.columns, columnCount: columnCount)
@@ -167,4 +147,3 @@ private extension MarkdownRewriter {
         return String(source[stringRange])
     }
 }
-

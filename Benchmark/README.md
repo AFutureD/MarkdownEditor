@@ -39,10 +39,10 @@ before code blocks changes.
 Perform repeated offset mapping over the whole rendered document. These cover
 the binary-search lookup path in `MarkdownPresentation`.
 
-`controller.prefix-typing-before-code-blocks`
+`coordinator.prefix-typing-before-code-blocks`
 
 Simulates repeated typing in a paragraph before many code blocks through
-`MarkdownEditorController`. This covers the controller edit path that previously
+`MarkdownEditorCoordinator`. This covers the coordinator edit path that previously
 caused repeated full presentation rebuilds and code block identity churn.
 
 ## Output Checks
@@ -74,6 +74,6 @@ Compare timings between release builds on the same machine. A single run is good
 for quick feedback; use several consecutive runs before drawing conclusions.
 
 This benchmark does not instantiate the iOS-only Runestone views. It covers the
-data-level causes of the previous Instruments issue: stable block IDs, controller
+data-level causes of the previous Instruments issue: stable block IDs, coordinator
 typing before code blocks, and source/visible offset lookup cost. Use Time
 Profiler on the Example app to validate UIKit, Runestone, and Tree-sitter costs.

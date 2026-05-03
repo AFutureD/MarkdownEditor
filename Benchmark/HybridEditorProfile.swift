@@ -55,7 +55,7 @@ struct HybridEditorProfile {
             lookupSourceOffsets(in: preview, sourceLength: source.utf16.count, repetitions: 20)
         }
 
-        let controllerSourceLength = measure("controller.prefix-typing-before-code-blocks") {
+        let coordinatorSourceLength = measure("coordinator.prefix-typing-before-code-blocks") {
             typeBeforeCodeBlocks(source: source, insertions: 20)
         }
 
@@ -69,7 +69,7 @@ struct HybridEditorProfile {
         print("code.block.ids.retained.after-prefix-edit=\(retainedCodeBlockIDCount)")
         print("visible.lookup.checksum=\(visibleLookupChecksum)")
         print("source.lookup.checksum=\(sourceLookupChecksum)")
-        print("controller.source.characters.after-prefix-typing=\(controllerSourceLength)")
+        print("coordinator.source.characters.after-prefix-typing=\(coordinatorSourceLength)")
     }
 
     static func measure<T>(_ name: String, operation: () -> T) -> T {
@@ -116,16 +116,16 @@ struct HybridEditorProfile {
     static func typeBeforeCodeBlocks(source: String, insertions: Int) -> Int {
         // Mirror the trace scenario: repeated typing before code blocks should
         // preserve downstream IDs and avoid code block view churn in the app.
-        let controller = MarkdownEditorController(source: source)
-        guard let paragraph = controller.document.blocks.first(where: { $0.kind == .paragraph }) else {
-            return controller.source.utf16.count
+        let coordinator = MarkdownEditorCoordinator(source: source)
+        guard let paragraph = coordinator.document.blocks.first(where: { $0.kind == .paragraph }) else {
+            return coordinator.source.utf16.count
         }
 
         var sourceOffset = paragraph.contentRange.location
         for _ in 0..<insertions {
-            let visibleOffset = controller.visibleOffset(forSourceOffset: sourceOffset)
-            _ = controller.activate(atVisibleOffset: visibleOffset)
-            guard let result = controller.replaceVisible(
+            let visibleOffset = coordinator.visibleOffset(forSourceOffset: sourceOffset)
+            _ = coordinator.activate(atVisibleOffset: visibleOffset)
+            guard let result = coordinator.replaceVisible(
                 range: NSRange(location: visibleOffset, length: 0),
                 with: "x"
             ) else {
@@ -134,7 +134,7 @@ struct HybridEditorProfile {
             sourceOffset = result.selectionSourceOffset
         }
 
-        return controller.source.utf16.count
+        return coordinator.source.utf16.count
     }
 
     static func codeBlockIDs(in blocks: [MarkdownBlock]) -> [String] {

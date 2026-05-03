@@ -192,54 +192,54 @@ private typealias TestFont = UIFont
 }
 
 @Test @MainActor func visibleOffsetZeroActivatesFirstBlock() {
-    let controller = MarkdownEditorController(source: "# Title\n\nBody")
+    let coordinator = MarkdownEditorCoordinator(source: "# Title\n\nBody")
 
-    _ = controller.activate(atVisibleOffset: 0)
+    _ = coordinator.activate(atVisibleOffset: 0)
 
-    #expect(controller.activeScope == .block("b0"))
-    #expect(controller.presentation.attributedString.string.hasPrefix("# Title"))
+    #expect(coordinator.activeScope == .block("b0"))
+    #expect(coordinator.presentation.attributedString.string.hasPrefix("# Title"))
 }
 
 @Test @MainActor func activeHeadingEditUpdatesSource() {
-    let controller = MarkdownEditorController(source: "# Title\n")
-    _ = controller.activate(atVisibleOffset: 0)
-    let insertionOffset = utf16Offset(in: controller.presentation.attributedString.string, of: "Title") + "Title".utf16.count
+    let coordinator = MarkdownEditorCoordinator(source: "# Title\n")
+    _ = coordinator.activate(atVisibleOffset: 0)
+    let insertionOffset = utf16Offset(in: coordinator.presentation.attributedString.string, of: "Title") + "Title".utf16.count
     let range = NSRange(location: insertionOffset, length: 0)
 
-    let result = controller.replaceVisible(range: range, with: "!")
+    let result = coordinator.replaceVisible(range: range, with: "!")
 
     #expect(result != nil)
-    #expect(controller.source == "# Title!\n")
+    #expect(coordinator.source == "# Title!\n")
 }
 
 @Test @MainActor func typingFromPreviewRemapsThroughSourceOffset() {
-    let controller = MarkdownEditorController(source: "This has **bold** text")
-    let previewInsertion = utf16Offset(in: controller.presentation.attributedString.string, of: "bold") + "bold".utf16.count
-    let sourceStart = controller.sourceOffset(forVisibleOffset: previewInsertion)
+    let coordinator = MarkdownEditorCoordinator(source: "This has **bold** text")
+    let previewInsertion = utf16Offset(in: coordinator.presentation.attributedString.string, of: "bold") + "bold".utf16.count
+    let sourceStart = coordinator.sourceOffset(forVisibleOffset: previewInsertion)
 
-    _ = controller.activate(atVisibleOffset: previewInsertion)
-    let activeStart = controller.visibleOffset(forSourceOffset: sourceStart)
-    let result = controller.replaceVisible(range: NSRange(location: activeStart, length: 0), with: "!")
+    _ = coordinator.activate(atVisibleOffset: previewInsertion)
+    let activeStart = coordinator.visibleOffset(forSourceOffset: sourceStart)
+    let result = coordinator.replaceVisible(range: NSRange(location: activeStart, length: 0), with: "!")
 
     #expect(result != nil)
-    #expect(controller.source == "This has **bold!** text")
+    #expect(coordinator.source == "This has **bold!** text")
 }
 
 @Test @MainActor func typingOnBlankLineBetweenParagraphsInsertsContent() {
-    let controller = MarkdownEditorController(source: "First paragraph\n\nSecond paragraph")
-    let blankLineOffset = utf16Offset(in: controller.presentation.attributedString.string, of: "\n\n") + 1
+    let coordinator = MarkdownEditorCoordinator(source: "First paragraph\n\nSecond paragraph")
+    let blankLineOffset = utf16Offset(in: coordinator.presentation.attributedString.string, of: "\n\n") + 1
 
-    _ = controller.activate(atVisibleOffset: blankLineOffset)
-    #expect(controller.activeScope == .block("b1"))
+    _ = coordinator.activate(atVisibleOffset: blankLineOffset)
+    #expect(coordinator.activeScope == .block("b1"))
 
-    let result = controller.replaceVisible(range: NSRange(location: blankLineOffset, length: 0), with: "Inserted paragraph")
-    let continuationOffset = controller.visibleOffset(forSourceOffset: result?.selectionSourceOffset ?? 0)
-    let continuationResult = controller.replaceVisible(range: NSRange(location: continuationOffset, length: 0), with: "!")
+    let result = coordinator.replaceVisible(range: NSRange(location: blankLineOffset, length: 0), with: "Inserted paragraph")
+    let continuationOffset = coordinator.visibleOffset(forSourceOffset: result?.selectionSourceOffset ?? 0)
+    let continuationResult = coordinator.replaceVisible(range: NSRange(location: continuationOffset, length: 0), with: "!")
 
     #expect(result != nil)
     #expect(continuationResult != nil)
-    #expect(controller.activeScope == .block("b0"))
-    #expect(controller.source == "First paragraph\nInserted paragraph!\nSecond paragraph")
+    #expect(coordinator.activeScope == .block("b0"))
+    #expect(coordinator.source == "First paragraph\nInserted paragraph!\nSecond paragraph")
 }
 
 @Test @MainActor func tableCellEditUsesCanonicalSerialization() {
@@ -248,13 +248,13 @@ private typealias TestFont = UIFont
     | --- | --- |
     | Ana | 20 |
     """
-    let controller = MarkdownEditorController(source: source)
-    let table = controller.firstBlock(kind: .table)!
+    let coordinator = MarkdownEditorCoordinator(source: source)
+    let table = coordinator.document.blocks.first { $0.kind == .table }!
 
-    controller.updateTableCell(blockID: table.id, row: 1, column: 0, text: "Mira")
+    coordinator.updateTableCell(blockID: table.id, row: 1, column: 0, text: "Mira")
 
-    #expect(controller.source.contains("| Mira | 20  |"))
-    #expect(controller.source.contains("| Name | Age |"))
+    #expect(coordinator.source.contains("| Mira | 20  |"))
+    #expect(coordinator.source.contains("| Name | Age |"))
 }
 
 @Test @MainActor func codeContentEditPreservesFence() {
@@ -263,12 +263,12 @@ private typealias TestFont = UIFont
     let x = 1
     ```
     """
-    let controller = MarkdownEditorController(source: source)
-    let code = controller.firstBlock(kind: .codeBlock)!
+    let coordinator = MarkdownEditorCoordinator(source: source)
+    let code = coordinator.document.blocks.first { $0.kind == .codeBlock }!
 
-    controller.replaceCodeContent(blockID: code.id, with: "let y = 2\n")
+    coordinator.replaceCodeContent(blockID: code.id, with: "let y = 2\n")
 
-    #expect(controller.source == "```swift\nlet y = 2\n```")
+    #expect(coordinator.source == "```swift\nlet y = 2\n```")
 }
 
 @Test func codeBlockPreviewRendersAttachmentInsteadOfTextPlaceholder() {
@@ -324,15 +324,15 @@ private typealias TestFont = UIFont
 
     Tail paragraph
     """
-    let controller = MarkdownEditorController(source: source)
-    let code = controller.firstBlock(kind: .codeBlock)!
-    let codeObject = controller.presentation.blocks.first { $0.kind == .codeBlock }!.codeBlock!
+    let coordinator = MarkdownEditorCoordinator(source: source)
+    let code = coordinator.document.blocks.first { $0.kind == .codeBlock }!
+    let codeObject = coordinator.presentation.blocks.first { $0.kind == .codeBlock }!.codeBlock!
 
-    controller.replaceCodeContent(blockID: code.id, with: codeObject.sourceReplacement(forEditedContent: "let y = 2"))
+    coordinator.replaceCodeContent(blockID: code.id, with: codeObject.sourceReplacement(forEditedContent: "let y = 2"))
 
-    #expect(controller.source.contains("let y = 2\n```"))
-    #expect(controller.source.contains("Tail paragraph"))
-    #expect(controller.document.blocks.contains { $0.kind == .paragraph })
+    #expect(coordinator.source.contains("let y = 2\n```"))
+    #expect(coordinator.source.contains("Tail paragraph"))
+    #expect(coordinator.document.blocks.contains { $0.kind == .paragraph })
 }
 
 @Test @MainActor func outerVisibleEditCannotModifyCodeBlockFence() {
@@ -343,16 +343,16 @@ private typealias TestFont = UIFont
 
     Tail paragraph
     """
-    let controller = MarkdownEditorController(source: source)
-    let code = controller.firstBlock(kind: .codeBlock)!
-    _ = controller.activate(scope: .codeBlock(code.id), preservingSourceOffset: code.sourceRange.location)
-    let codeBlockPresentation = controller.presentation.blocks.first { $0.kind == .codeBlock }!
+    let coordinator = MarkdownEditorCoordinator(source: source)
+    let code = coordinator.document.blocks.first { $0.kind == .codeBlock }!
+    _ = coordinator.activate(scope: .codeBlock(code.id), preservingSourceOffset: code.sourceRange.location)
+    let codeBlockPresentation = coordinator.presentation.blocks.first { $0.kind == .codeBlock }!
     let newlineAfterObject = NSRange(location: codeBlockPresentation.visibleRange.upperBound - 1, length: 0)
 
-    let result = controller.replaceVisible(range: newlineAfterObject, with: "`")
+    let result = coordinator.replaceVisible(range: newlineAfterObject, with: "`")
 
     #expect(result == nil)
-    #expect(controller.source == source)
+    #expect(coordinator.source == source)
 }
 
 @Test @MainActor func outerVisibleEditCanAppendAfterTrailingCodeBlock() {
@@ -361,29 +361,29 @@ private typealias TestFont = UIFont
     let x = 1
     ```
     """
-    let controller = MarkdownEditorController(source: source)
-    let code = controller.firstBlock(kind: .codeBlock)!
-    _ = controller.activate(scope: .codeBlock(code.id), preservingSourceOffset: code.sourceRange.location)
-    let codeBlockPresentation = controller.presentation.blocks.first { $0.kind == .codeBlock }!
+    let coordinator = MarkdownEditorCoordinator(source: source)
+    let code = coordinator.document.blocks.first { $0.kind == .codeBlock }!
+    _ = coordinator.activate(scope: .codeBlock(code.id), preservingSourceOffset: code.sourceRange.location)
+    let codeBlockPresentation = coordinator.presentation.blocks.first { $0.kind == .codeBlock }!
     let trailingInsertion = NSRange(location: codeBlockPresentation.visibleRange.upperBound, length: 0)
 
-    let result = controller.replaceVisible(range: trailingInsertion, with: "\n")
+    let result = coordinator.replaceVisible(range: trailingInsertion, with: "\n")
 
     #expect(result != nil)
-    #expect(controller.source == "```swift\nlet x = 1\n```\n")
-    #expect(controller.activeScope == nil)
+    #expect(coordinator.source == "```swift\nlet x = 1\n```\n")
+    #expect(coordinator.activeScope == nil)
 
-    let continuationOffset = controller.visibleOffset(forSourceOffset: result?.selectionSourceOffset ?? 0)
-    _ = controller.activate(atVisibleOffset: continuationOffset)
-    #expect(controller.activeScope == nil)
-    let continuationResult = controller.replaceVisible(
+    let continuationOffset = coordinator.visibleOffset(forSourceOffset: result?.selectionSourceOffset ?? 0)
+    _ = coordinator.activate(atVisibleOffset: continuationOffset)
+    #expect(coordinator.activeScope == nil)
+    let continuationResult = coordinator.replaceVisible(
         range: NSRange(location: continuationOffset, length: 0),
         with: "Tail paragraph"
     )
 
     #expect(continuationResult != nil)
-    #expect(controller.source == "```swift\nlet x = 1\n```\nTail paragraph")
-    #expect(controller.document.blocks.contains { $0.kind == .paragraph })
+    #expect(coordinator.source == "```swift\nlet x = 1\n```\nTail paragraph")
+    #expect(coordinator.document.blocks.contains { $0.kind == .paragraph })
 }
 
 @Test @MainActor func outerVisibleTextAppendAfterTrailingCodeBlockStartsNewLine() {
@@ -392,16 +392,16 @@ private typealias TestFont = UIFont
     let x = 1
     ```
     """
-    let controller = MarkdownEditorController(source: source)
-    let codeBlockPresentation = controller.presentation.blocks.first { $0.kind == .codeBlock }!
+    let coordinator = MarkdownEditorCoordinator(source: source)
+    let codeBlockPresentation = coordinator.presentation.blocks.first { $0.kind == .codeBlock }!
     let trailingInsertion = NSRange(location: codeBlockPresentation.visibleRange.upperBound, length: 0)
 
-    let result = controller.replaceVisible(range: trailingInsertion, with: "Tail paragraph")
+    let result = coordinator.replaceVisible(range: trailingInsertion, with: "Tail paragraph")
 
     #expect(result != nil)
-    #expect(controller.source == "```swift\nlet x = 1\n```\nTail paragraph")
-    #expect(controller.activeScope == nil)
-    #expect(controller.document.blocks.contains { $0.kind == .paragraph })
+    #expect(coordinator.source == "```swift\nlet x = 1\n```\nTail paragraph")
+    #expect(coordinator.activeScope == nil)
+    #expect(coordinator.document.blocks.contains { $0.kind == .paragraph })
 }
 
 @Test @MainActor func codeLanguageEditPreservesContentAndClosingFence() {
@@ -410,12 +410,12 @@ private typealias TestFont = UIFont
     let x = 1
     ```
     """
-    let controller = MarkdownEditorController(source: source)
-    let code = controller.firstBlock(kind: .codeBlock)!
+    let coordinator = MarkdownEditorCoordinator(source: source)
+    let code = coordinator.document.blocks.first { $0.kind == .codeBlock }!
 
-    controller.updateCodeLanguage(blockID: code.id, language: "python")
+    coordinator.updateCodeLanguage(blockID: code.id, language: "python")
 
-    #expect(controller.source == "```python\nlet x = 1\n```")
+    #expect(coordinator.source == "```python\nlet x = 1\n```")
 }
 
 @Test func codeBlockIDsSurvivePrecedingInlineEdits() {
