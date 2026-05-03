@@ -15,6 +15,10 @@ let package = Package(
             name: "MarkdownEditor",
             targets: ["MarkdownEditor"]
         ),
+        .executable(
+            name: "Benchmark",
+            targets: ["Benchmark"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-markdown.git", from: "0.7.3"),
@@ -31,6 +35,11 @@ let package = Package(
         .testTarget(
             name: "MarkdownEditorTests",
             dependencies: ["MarkdownEditor"]
+        ),
+        .executableTarget(
+            name: "Benchmark",
+            dependencies: ["MarkdownEditor"],
+            path: "Benchmark"
         ),
     ],
     swiftLanguageModes: [.v6]
