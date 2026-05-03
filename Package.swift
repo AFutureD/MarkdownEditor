@@ -46,7 +46,8 @@ let package = Package(
         .executableTarget(
             name: "Benchmark",
             dependencies: ["MarkdownEditor"],
-            path: "Benchmark"
+            path: "Benchmark",
+            exclude: ["README.md"]
         ),
     ],
     swiftLanguageModes: [.v6]

@@ -70,7 +70,7 @@ private typealias TestFont = UIFont
     let active = renderer.render(document: document)
     let activeString = active.attributedString.string
 
-    #expect(scope == .listGroup("list-7"))
+    #expect(scope == .listGroup("list-0"))
     #expect(activeString.contains("- Alpha"))
     #expect(activeString.contains("- Beta"))
     #expect(activeString.contains("  - Nested"))
@@ -230,7 +230,7 @@ private typealias TestFont = UIFont
     let blankLineOffset = utf16Offset(in: controller.presentation.attributedString.string, of: "\n\n") + 1
 
     _ = controller.activate(atVisibleOffset: blankLineOffset)
-    #expect(controller.activeScope == .block("b16"))
+    #expect(controller.activeScope == .block("b1"))
 
     let result = controller.replaceVisible(range: NSRange(location: blankLineOffset, length: 0), with: "Inserted paragraph")
     let continuationOffset = controller.visibleOffset(forSourceOffset: result?.selectionSourceOffset ?? 0)
@@ -416,6 +416,28 @@ private typealias TestFont = UIFont
     controller.updateCodeLanguage(blockID: code.id, language: "python")
 
     #expect(controller.source == "```python\nlet x = 1\n```")
+}
+
+@Test func codeBlockIDsSurvivePrecedingInlineEdits() {
+    let original = """
+    Intro paragraph
+
+    ```swift
+    let x = 1
+    ```
+    """
+    let edited = """
+    Intro paragraph!
+
+    ```swift
+    let x = 1
+    ```
+    """
+
+    let originalCodeID = MarkdownDocument(source: original).blocks.first { $0.kind == .codeBlock }?.id
+    let editedCodeID = MarkdownDocument(source: edited).blocks.first { $0.kind == .codeBlock }?.id
+
+    #expect(originalCodeID == editedCodeID)
 }
 
 private func utf16Offset(in string: String, of needle: String) -> Int {

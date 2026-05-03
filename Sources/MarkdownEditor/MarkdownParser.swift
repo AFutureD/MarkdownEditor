@@ -54,7 +54,7 @@ public struct MarkdownParser: Sendable {
             index = result.nextIndex
         }
 
-        return blocks
+        return blocks.assigningStableIDs()
     }
 }
 
@@ -318,6 +318,23 @@ private extension MarkdownParser {
     }
 }
 
+private extension Array where Element == MarkdownBlock {
+    // Keep block identities independent from UTF-16 source offsets. Inline edits
+    // before code blocks should not make every downstream object view look stale.
+    func assigningStableIDs() -> [MarkdownBlock] {
+        var listIndex = 0
+        return enumerated().map { index, block in
+            var block = block
+            block.id = "b\(index)"
+            if block.kind == .list {
+                block.listGroupID = "list-\(listIndex)"
+                listIndex += 1
+            }
+            return block
+        }
+    }
+}
+
 struct MarkdownLine: Equatable {
     var text: String
     var range: MarkdownSourceRange
@@ -364,4 +381,3 @@ struct MarkdownLine: Equatable {
         return lines
     }
 }
-

@@ -3,6 +3,7 @@ import MarkdownEditor
 
 @main
 struct HybridEditorProfile {
+    @MainActor
     static func main() {
         let source = makeDocument(paragraphs: 1_000, tables: 50, codeBlocks: 100)
         let parser = MarkdownParser()
@@ -22,14 +23,22 @@ struct HybridEditorProfile {
             renderer.render(source: source, blocks: blocks, activeScope: listScope)
         }
 
+        let prefixEditedSource: String
         if let paragraph = blocks.first(where: { $0.kind == .paragraph }) {
-            _ = measure("rewrite.paragraph-insert") {
+            let editResult = measure("rewrite.paragraph-insert") {
                 rewriter.replace(
                     source: source,
                     range: MarkdownSourceRange(location: paragraph.contentRange.location, length: 0),
                     with: "typed "
                 )
             }
+            prefixEditedSource = editResult.source
+        } else {
+            prefixEditedSource = source
+        }
+
+        let prefixEditedBlocks = measure("parse.prefix-edited-large-document") {
+            parser.parse(prefixEditedSource)
         }
 
         if let table = blocks.first(where: { $0.kind == .table }) {
@@ -38,9 +47,29 @@ struct HybridEditorProfile {
             }
         }
 
+        let visibleLookupChecksum = measure("presentation.visible-to-source-lookups") {
+            lookupVisibleOffsets(in: preview, repetitions: 20)
+        }
+
+        let sourceLookupChecksum = measure("presentation.source-to-visible-lookups") {
+            lookupSourceOffsets(in: preview, sourceLength: source.utf16.count, repetitions: 20)
+        }
+
+        let controllerSourceLength = measure("controller.prefix-typing-before-code-blocks") {
+            typeBeforeCodeBlocks(source: source, insertions: 20)
+        }
+
+        let originalCodeBlockIDs = codeBlockIDs(in: blocks)
+        let retainedCodeBlockIDCount = retainedCodeBlockIDs(before: blocks, after: prefixEditedBlocks)
+
         print("visible.characters=\(preview.attributedString.length)")
         print("source.characters=\(source.utf16.count)")
         print("blocks=\(blocks.count)")
+        print("code.blocks=\(originalCodeBlockIDs.count)")
+        print("code.block.ids.retained.after-prefix-edit=\(retainedCodeBlockIDCount)")
+        print("visible.lookup.checksum=\(visibleLookupChecksum)")
+        print("source.lookup.checksum=\(sourceLookupChecksum)")
+        print("controller.source.characters.after-prefix-typing=\(controllerSourceLength)")
     }
 
     static func measure<T>(_ name: String, operation: () -> T) -> T {
@@ -50,6 +79,71 @@ struct HybridEditorProfile {
         let elapsed = start.duration(to: clock.now)
         print("\(name)=\(elapsed.components.seconds)s \(elapsed.components.attoseconds / 1_000_000_000_000_000)ms")
         return result
+    }
+
+    static func lookupVisibleOffsets(in presentation: MarkdownPresentation, repetitions: Int) -> Int {
+        let length = presentation.attributedString.length
+        guard length > 0 else { return 0 }
+
+        // Accumulate results so release builds cannot optimize the lookup loop away.
+        var checksum = 0
+        for _ in 0..<repetitions {
+            for offset in 0...length {
+                checksum &+= presentation.visibleOffsetToSource(offset)
+            }
+        }
+        return checksum
+    }
+
+    static func lookupSourceOffsets(
+        in presentation: MarkdownPresentation,
+        sourceLength: Int,
+        repetitions: Int
+    ) -> Int {
+        guard sourceLength > 0 else { return 0 }
+
+        // Accumulate results so release builds cannot optimize the lookup loop away.
+        var checksum = 0
+        for _ in 0..<repetitions {
+            for offset in 0...sourceLength {
+                checksum &+= presentation.sourceOffsetToVisible(offset)
+            }
+        }
+        return checksum
+    }
+
+    @MainActor
+    static func typeBeforeCodeBlocks(source: String, insertions: Int) -> Int {
+        // Mirror the trace scenario: repeated typing before code blocks should
+        // preserve downstream IDs and avoid code block view churn in the app.
+        let controller = MarkdownEditorController(source: source)
+        guard let paragraph = controller.document.blocks.first(where: { $0.kind == .paragraph }) else {
+            return controller.source.utf16.count
+        }
+
+        var sourceOffset = paragraph.contentRange.location
+        for _ in 0..<insertions {
+            let visibleOffset = controller.visibleOffset(forSourceOffset: sourceOffset)
+            _ = controller.activate(atVisibleOffset: visibleOffset)
+            guard let result = controller.replaceVisible(
+                range: NSRange(location: visibleOffset, length: 0),
+                with: "x"
+            ) else {
+                continue
+            }
+            sourceOffset = result.selectionSourceOffset
+        }
+
+        return controller.source.utf16.count
+    }
+
+    static func codeBlockIDs(in blocks: [MarkdownBlock]) -> [String] {
+        blocks.filter { $0.kind == .codeBlock }.map(\.id)
+    }
+
+    static func retainedCodeBlockIDs(before: [MarkdownBlock], after: [MarkdownBlock]) -> Int {
+        let beforeIDs = Set(codeBlockIDs(in: before))
+        return codeBlockIDs(in: after).filter { beforeIDs.contains($0) }.count
     }
 
     static func makeDocument(paragraphs: Int, tables: Int, codeBlocks: Int) -> String {
@@ -87,4 +181,3 @@ struct HybridEditorProfile {
         return output
     }
 }
-

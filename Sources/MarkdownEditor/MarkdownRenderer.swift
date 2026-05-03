@@ -108,17 +108,12 @@ public struct MarkdownPresentation {
     }
 
     public func blockPresentation(containingVisibleOffset offset: Int) -> MarkdownBlockPresentation? {
-        if let exactStart = blocks.first(where: { $0.visibleRange.location == offset }) {
-            return exactStart
-        }
-
+        guard !blocks.isEmpty else { return nil }
         if offset >= attributedString.length {
             return blocks.last
         }
 
-        return blocks.first { presentation in
-            offset >= presentation.visibleRange.location && offset < presentation.visibleRange.location + presentation.visibleRange.length
-        }
+        return binarySearchBlock(containingVisibleOffset: offset)
     }
 
     public func visibleOffsetToSource(_ offset: Int) -> Int {
@@ -157,18 +152,62 @@ public struct MarkdownPresentation {
     }
 
     private func blockPresentation(containingSourceOffset offset: Int) -> MarkdownBlockPresentation? {
-        if let exactStart = blocks.first(where: { $0.sourceRange.location == offset }) {
-            return exactStart
-        }
-
         let documentUpperBound = blocks.last?.sourceRange.upperBound ?? 0
         if offset >= documentUpperBound {
             return blocks.last
         }
 
-        return blocks.first { presentation in
-            presentation.sourceRange.contains(offset)
+        return binarySearchBlock(containingSourceOffset: offset)
+    }
+
+    // Blocks are emitted in source/visible order. These lookups need range
+    // containment, so a Dictionary would only help exact block-start offsets.
+    private func binarySearchBlock(containingVisibleOffset offset: Int) -> MarkdownBlockPresentation? {
+        var lowerBound = 0
+        var upperBound = blocks.count
+
+        while lowerBound < upperBound {
+            let index = lowerBound + (upperBound - lowerBound) / 2
+            let range = blocks[index].visibleRange
+
+            if offset < range.location {
+                upperBound = index
+            } else if offset >= range.upperBound {
+                lowerBound = index + 1
+            } else {
+                return blocks[index]
+            }
         }
+
+        guard lowerBound < blocks.count,
+              blocks[lowerBound].visibleRange.location == offset else {
+            return nil
+        }
+        return blocks[lowerBound]
+    }
+
+    private func binarySearchBlock(containingSourceOffset offset: Int) -> MarkdownBlockPresentation? {
+        var lowerBound = 0
+        var upperBound = blocks.count
+
+        while lowerBound < upperBound {
+            let index = lowerBound + (upperBound - lowerBound) / 2
+            let range = blocks[index].sourceRange
+
+            if offset < range.location {
+                upperBound = index
+            } else if offset >= range.upperBound {
+                lowerBound = index + 1
+            } else {
+                return blocks[index]
+            }
+        }
+
+        guard lowerBound < blocks.count,
+              blocks[lowerBound].sourceRange.location == offset else {
+            return nil
+        }
+        return blocks[lowerBound]
     }
 
     private func isTrailingBoundaryOfCodeBlock(_ offset: Int) -> Bool {
