@@ -1,56 +1,5 @@
 # TextKit 2 Markdown Hybrid Editor
 
-<!--
-Meta JSON Schema
-
-{
-  "$schema": "https://json-schema.org/draft-07/schema",
-  "type": "object",
-  "properties": {
-    "Task": {
-      "type": "string",
-      "description": "ID-SLUG"
-    },
-    "Author": {
-      "type": "string",
-      "description": "The author of this task"
-    },
-    "Status": {
-      "type": "string",
-      "description": "The current status of this task",
-      "enum": [
-        "DRAFT",
-        "DONE",
-        "DEVELOPING"
-      ]
-    },
-    "Type": {
-      "type": "string",
-      "description": "The type of this task",
-      "enum": [
-        "FEAT",
-        "BUG"
-      ]
-    },
-    "Related": {
-      "type": "array",
-      "description": "Related tasks",
-      "uniqueItems": true,
-      "items": {
-        "type": "string"
-      }
-    }
-  },
-  "required": [
-    "Task",
-    "Author",
-    "Status",
-    "Type"
-  ]
-}
-
--->
-
 * Task: 260503T0008-textkit2-markdown-hybrid-editor
 * Author: Huanan
 * Status: DRAFT
