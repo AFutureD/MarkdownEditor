@@ -27,7 +27,6 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
 
     private var isApplyingPresentation = false
     private var isTransferringFocusToCodeBlock = false
-    private var scrollRestoreGeneration = 0
     private var codeBlockViews: [String: CodeBlockObjectView] = [:]
 
     public init(coordinator: MarkdownEditorCoordinator) {
@@ -43,7 +42,7 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
         fatalError("init(coder:) is not supported")
     }
 
-    public func applyPresentation(selectedSourceOffset: Int? = nil, preserveScrollPosition: Bool = true) {
+    public func applyPresentation(selectedSourceOffset: Int? = nil) {
         guard !isApplyingPresentation else { return }
         let currentSourceOffset = selectedSourceOffset ?? coordinator.sourceOffset(forVisibleOffset: textView.selectedRange.location)
         let needsTextUpdate = !textView.attributedText.isEqual(to: coordinator.presentation.attributedString)
@@ -53,30 +52,20 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
             return
         }
 
-        let shouldPreserveScrollOffset = preserveScrollPosition && isTrackingScrollPosition
-        let preservedContentOffset = textView.contentOffset
-        scrollRestoreGeneration += 1
-        let restoreGeneration = scrollRestoreGeneration
-
         isApplyingPresentation = true
-        UIView.performWithoutAnimation {
-            if needsTextUpdate {
-                configureCodeBlockAttachments(in: coordinator.presentation.attributedString)
-                textView.attributedText = coordinator.presentation.attributedString
-            }
-            let visibleOffset = outerSelectionVisibleOffset(forSourceOffset: currentSourceOffset)
-            textView.selectedRange = NSRange(location: min(visibleOffset, textView.attributedText.length), length: 0)
-            syncOuterTextViewCaretVisibility()
-            syncCodeBlockViews()
-            restoreContentOffset(preservedContentOffset, when: shouldPreserveScrollOffset)
-        }
-        isApplyingPresentation = false
+        defer { isApplyingPresentation = false }
 
-        guard shouldPreserveScrollOffset else { return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.scrollRestoreGeneration == restoreGeneration else { return }
-            self.restoreContentOffset(preservedContentOffset, when: true)
-            self.syncCodeBlockViews()
+        preserveContentOffset {
+            UIView.performWithoutAnimation {
+                if needsTextUpdate {
+                    configureCodeBlockAttachments(in: coordinator.presentation.attributedString)
+                    textView.attributedText = coordinator.presentation.attributedString
+                }
+                let visibleOffset = outerSelectionVisibleOffset(forSourceOffset: currentSourceOffset)
+                textView.selectedRange = NSRange(location: min(visibleOffset, textView.attributedText.length), length: 0)
+                syncOuterTextViewCaretVisibility()
+                syncCodeBlockViews()
+            }
         }
     }
 
@@ -87,14 +76,15 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
 
     public func activateCodeBlock(blockID: String) {
         guard let block = coordinator.document.block(id: blockID) else { return }
-        if coordinator.activeScope == .codeBlock(blockID) {
+
+        if coordinator.activeScope != .codeBlock(blockID) {
+            _ = coordinator.activate(scope: .codeBlock(blockID), preservingSourceOffset: block.sourceRange.location)
+            applyPresentation(selectedSourceOffset: block.sourceRange.location)
+        } else {
             syncOuterTextViewCaretVisibility()
-            focusCodeBlockEditor(blockID: blockID, scrollIntoView: false)
-            return
         }
-        _ = coordinator.activate(scope: .codeBlock(blockID), preservingSourceOffset: block.sourceRange.location)
-        applyPresentation(selectedSourceOffset: block.sourceRange.location, preserveScrollPosition: false)
-        focusCodeBlockEditor(blockID: blockID, scrollIntoView: true)
+
+        focusCodeBlockEditor(blockID: blockID)
     }
 
     public func textViewDidChangeSelection(_ textView: UITextView) {
@@ -174,26 +164,11 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
         ])
     }
 
-    private var isTrackingScrollPosition: Bool {
-        textView.window != nil && textView.bounds.height > 0 && textView.contentSize.height > textView.bounds.height
-    }
-
-    private func restoreContentOffset(_ contentOffset: CGPoint, when shouldRestore: Bool) {
-        guard shouldRestore else { return }
+    private func preserveContentOffset(_ update: () -> Void) {
+        let contentOffset = textView.contentOffset
+        update()
         textView.layoutIfNeeded()
-        textView.setContentOffset(clampedContentOffset(contentOffset), animated: false)
-    }
-
-    private func clampedContentOffset(_ contentOffset: CGPoint) -> CGPoint {
-        let inset = textView.adjustedContentInset
-        let minX = -inset.left
-        let minY = -inset.top
-        let maxX = max(minX, textView.contentSize.width - textView.bounds.width + inset.right)
-        let maxY = max(minY, textView.contentSize.height - textView.bounds.height + inset.bottom)
-        return CGPoint(
-            x: min(max(contentOffset.x, minX), maxX),
-            y: min(max(contentOffset.y, minY), maxY)
-        )
+        textView.setContentOffset(contentOffset, animated: false)
     }
 }
 
@@ -294,27 +269,14 @@ private extension MarkdownHybridEditorView {
         }
     }
 
-    func scrollCodeBlockToVisible(blockID: String) {
-        guard let presentation = codeBlockPresentation(blockID: blockID) else { return }
-        layoutCodeBlockViews(presentations: [presentation])
-        if let view = codeBlockViews[blockID] {
-            textView.scrollRectToVisible(view.frame.insetBy(dx: 0, dy: -12), animated: false)
-        } else {
-            textView.scrollRangeToVisible(presentation.visibleRange)
-        }
-        textView.layoutIfNeeded()
-        syncCodeBlockViews()
-    }
-
-    func focusCodeBlockEditor(blockID: String, scrollIntoView: Bool) {
+    func focusCodeBlockEditor(blockID: String) {
         isTransferringFocusToCodeBlock = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            if scrollIntoView {
-                self.scrollCodeBlockToVisible(blockID: blockID)
+            self.preserveContentOffset {
+                self.ensureCodeBlockViewLoaded(blockID: blockID)
+                self.codeBlockViews[blockID]?.focusEditor()
             }
-            self.ensureCodeBlockViewLoaded(blockID: blockID)
-            self.codeBlockViews[blockID]?.focusEditor()
             DispatchQueue.main.async { [weak self] in
                 self?.isTransferringFocusToCodeBlock = false
             }
