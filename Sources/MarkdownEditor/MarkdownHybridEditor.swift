@@ -4,31 +4,6 @@ import Foundation
 import SwiftUI
 import UIKit
 
-import Runestone
-import TreeSitterJavaScriptRunestone
-import TreeSitterJSONRunestone
-import TreeSitterPythonRunestone
-import TreeSitterSwiftRunestone
-
-/// Preview-only hit target for the code body.
-///
-/// Runestone stays configured the same way in preview and editing modes; the
-/// wrapper uses this clear control to make preview taps activate the block
-/// before text editing begins.
-private final class CodeBlockActivationOverlay: UIControl {
-    var onActivate: (() -> Void)?
-
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        onActivate?()
-        super.touchesEnded(touches, with: event)
-    }
-
-    override func accessibilityActivate() -> Bool {
-        onActivate?()
-        return true
-    }
-}
-
 @MainActor
 public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
     public var coordinator: MarkdownEditorCoordinator {
@@ -263,7 +238,13 @@ private extension MarkdownHybridEditorView {
             )
             let view = codeBlockViews[presentation.blockID] ?? makeCodeBlockView(for: presentation)
             view.isHidden = false
-            view.update(presentation)
+            view.update(CodeBlockObjectState(
+                blockID: presentation.blockID,
+                mode: presentation.mode,
+                language: presentation.language,
+                displayLanguage: presentation.displayLanguage,
+                codeContent: presentation.codeContent
+            ))
         }
 
         layoutCodeBlockViews(presentations: presentations)
@@ -277,7 +258,11 @@ private extension MarkdownHybridEditorView {
         }
         view.onContentChange = { [weak self] blockID, content in
             guard let self else { return }
-            coordinator.replaceCodeContent(blockID: blockID, with: content)
+            guard let presentation = codeBlockPresentation(blockID: blockID) else { return }
+            coordinator.replaceCodeContent(
+                blockID: blockID,
+                with: presentation.sourceReplacement(forEditedContent: content)
+            )
             onSourceChange?(coordinator.source)
             applyPresentation(selectedSourceOffset: coordinator.document.block(id: blockID)?.code?.codeContentRange.location)
         }
@@ -448,292 +433,6 @@ private extension MarkdownHybridEditorView {
         in textLayoutManager: NSTextLayoutManager
     ) -> (any NSTextLocation)? {
         textLayoutManager.location(textLayoutManager.documentRange.location, offsetBy: visibleOffset)
-    }
-}
-
-@MainActor
-private final class CodeBlockObjectView: UIControl, UITextFieldDelegate {
-    var onActivate: ((String) -> Void)?
-    var onContentChange: ((String, String) -> Void)?
-    var onLanguageChange: ((String, String) -> Void)?
-
-    private let headerView = UIView()
-    private let languageField = UITextField()
-    private let copyButton = UIButton(type: .system)
-    private let activationOverlay = CodeBlockActivationOverlay()
-    private let codeView = TextView(frame: .zero)
-    private let theme = DefaultTheme()
-    private var appliedRunestoneLanguage: String?
-    private var presentation: MarkdownCodeBlockPresentation?
-    private var isUpdatingState = false
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        configure()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) is not supported")
-    }
-
-    func update(_ presentation: MarkdownCodeBlockPresentation) {
-        self.presentation = presentation
-        isUpdatingState = true
-
-        languageField.text = presentation.language
-        languageField.placeholder = presentation.displayLanguage
-        languageField.accessibilityIdentifier = "CodeLanguageControl-\(presentation.blockID)"
-        copyButton.accessibilityIdentifier = "CodeCopyButton-\(presentation.blockID)"
-        codeView.accessibilityIdentifier = "CodeBlockEditor-\(presentation.blockID)"
-        activationOverlay.accessibilityIdentifier = "CodeBlockActivationOverlay-\(presentation.blockID)"
-
-        let isEditing = presentation.mode == .objectEditing
-        activationOverlay.isHidden = isEditing
-        activationOverlay.isUserInteractionEnabled = !isEditing
-        activationOverlay.isAccessibilityElement = !isEditing
-        codeView.isEditable = isEditing
-        let language = runestoneLanguageIdentifier(for: presentation)
-        if codeView.text == presentation.codeContent,
-           appliedRunestoneLanguage == language {
-            // The user may have just typed this text; avoid resetting state and moving the caret.
-        } else if codeView.text != presentation.codeContent || appliedRunestoneLanguage != language {
-            codeView.setState(runestoneState(text: presentation.codeContent, language: language))
-            appliedRunestoneLanguage = language
-        }
-
-        setActiveAppearance(isEditing)
-        isUpdatingState = false
-        setNeedsLayout()
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let headerHeight: CGFloat = 36
-        headerView.frame = CGRect(x: 0, y: 0, width: bounds.width, height: headerHeight)
-
-        let horizontalInset: CGFloat = 10
-        let buttonWidth: CGFloat = 64
-        copyButton.frame = CGRect(
-            x: bounds.width - horizontalInset - buttonWidth,
-            y: 5,
-            width: buttonWidth,
-            height: 26
-        )
-        languageField.frame = CGRect(
-            x: horizontalInset,
-            y: 5,
-            width: max(44, copyButton.frame.minX - horizontalInset * 2),
-            height: 26
-        )
-        codeView.frame = CGRect(
-            x: 0,
-            y: headerHeight,
-            width: bounds.width,
-            height: max(0, bounds.height - headerHeight)
-        )
-        activationOverlay.frame = codeView.frame
-        if !activationOverlay.isHidden {
-            bringSubviewToFront(activationOverlay)
-        }
-    }
-
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard bounds.contains(point) else { return nil }
-        // In preview mode, route code-body taps to the overlay. In editing mode
-        // the overlay is hidden, so Runestone receives text interaction normally.
-        if presentation?.mode != .objectEditing, codeView.frame.contains(point) {
-            let overlayPoint = convert(point, to: activationOverlay)
-            return activationOverlay.hitTest(overlayPoint, with: event) ?? activationOverlay
-        }
-        return super.hitTest(point, with: event)
-    }
-
-    @objc private func activate() {
-        guard let presentation else { return }
-        guard presentation.mode != .objectEditing else { return }
-        onActivate?(presentation.blockID)
-    }
-
-    @objc private func copyCode() {
-        UIPasteboard.general.string = presentation?.codeContent ?? currentCodeText
-    }
-
-    @objc private func languageEditingDidEnd() {
-        guard let presentation else { return }
-        let language = (languageField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard language != presentation.language else { return }
-        onLanguageChange?(presentation.blockID, language)
-    }
-
-    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        textField.resignFirstResponder()
-        return true
-    }
-
-    func focusEditor() {
-        _ = codeView.becomeFirstResponder()
-    }
-
-    private var currentCodeText: String {
-        codeView.text
-    }
-
-    private func configure() {
-        backgroundColor = .secondarySystemBackground
-        clipsToBounds = true
-        layer.cornerRadius = 8
-        layer.borderWidth = 1
-        setActiveAppearance(false)
-
-        headerView.backgroundColor = .tertiarySystemBackground
-        addSubview(headerView)
-
-        languageField.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
-        languageField.textColor = .secondaryLabel
-        languageField.borderStyle = .none
-        languageField.autocorrectionType = .no
-        languageField.autocapitalizationType = .none
-        languageField.returnKeyType = .done
-        languageField.delegate = self
-        languageField.addTarget(self, action: #selector(languageEditingDidEnd), for: .editingDidEnd)
-        languageField.addTarget(self, action: #selector(languageEditingDidEnd), for: .primaryActionTriggered)
-        headerView.addSubview(languageField)
-
-        copyButton.setTitle("Copy", for: .normal)
-        copyButton.titleLabel?.font = .preferredFont(forTextStyle: .caption1)
-        copyButton.addTarget(self, action: #selector(copyCode), for: .touchUpInside)
-        headerView.addSubview(copyButton)
-
-        _ = Self.prepareRunestoneLanguages
-        codeView.editorDelegate = self
-        codeView.theme = theme
-        codeView.backgroundColor = .clear
-        codeView.isScrollEnabled = false
-        codeView.alwaysBounceVertical = false
-        codeView.alwaysBounceHorizontal = false
-        codeView.showsVerticalScrollIndicator = false
-        codeView.showsHorizontalScrollIndicator = false
-        codeView.isLineWrappingEnabled = true
-        codeView.showLineNumbers = false
-        codeView.lineHeightMultiplier = 1.15
-        codeView.textContainerInset = UIEdgeInsets(top: 8, left: 10, bottom: 6, right: 10)
-        codeView.autocorrectionType = .no
-        codeView.autocapitalizationType = .none
-        codeView.smartDashesType = .no
-        codeView.smartQuotesType = .no
-        codeView.spellCheckingType = .no
-        codeView.isEditable = false
-        codeView.isSelectable = true
-        addSubview(codeView)
-
-        activationOverlay.backgroundColor = .clear
-        activationOverlay.accessibilityLabel = "Edit code block"
-        activationOverlay.accessibilityTraits = .button
-        activationOverlay.onActivate = { [weak self] in
-            self?.activate()
-        }
-        addSubview(activationOverlay)
-    }
-
-    private func setActiveAppearance(_ isActive: Bool) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layer.borderColor = isActive ? UIColor.systemBlue.cgColor : UIColor.separator.cgColor
-        CATransaction.commit()
-    }
-
-    private func runestoneLanguageIdentifier(
-        for presentation: MarkdownCodeBlockPresentation
-    ) -> String {
-        Self.normalizedRunestoneLanguageIdentifier(presentation.language) ?? ""
-    }
-
-    private static func normalizedRunestoneLanguageIdentifier(_ language: String) -> String? {
-        switch language.lowercased() {
-        case "swift":
-            "swift"
-        case "javascript", "js":
-            "javascript"
-        case "json":
-            "json"
-        case "python", "py":
-            "python"
-        default:
-            nil
-        }
-    }
-
-    private func runestoneState(text: String, language: String) -> TextViewState {
-        switch language.lowercased() {
-        case "swift":
-            Self.prepareRunestoneLanguage("swift")
-            return TextViewState(text: text, theme: theme, language: Self.swiftRunestoneLanguage)
-        case "javascript", "js":
-            Self.prepareRunestoneLanguage("javascript")
-            return TextViewState(text: text, theme: theme, language: Self.javaScriptRunestoneLanguage)
-        case "json":
-            Self.prepareRunestoneLanguage("json")
-            return TextViewState(text: text, theme: theme, language: Self.jsonRunestoneLanguage)
-        case "python", "py":
-            Self.prepareRunestoneLanguage("python")
-            return TextViewState(text: text, theme: theme, language: Self.pythonRunestoneLanguage)
-        default:
-            return TextViewState(text: text, theme: theme)
-        }
-    }
-
-    private static let swiftRunestoneLanguage = TreeSitterLanguage.swift
-    private static let javaScriptRunestoneLanguage = TreeSitterLanguage.javaScript
-    private static let jsonRunestoneLanguage = TreeSitterLanguage.json
-    private static let pythonRunestoneLanguage = TreeSitterLanguage.python
-
-    private static let prepareRunestoneLanguages: Void = {
-        let languages = ["swift", "javascript", "json", "python"]
-        DispatchQueue.global(qos: .utility).async {
-            for language in languages {
-                prepareRunestoneLanguage(language)
-            }
-        }
-    }()
-
-    private static let runestoneLanguagePreparationLock = NSLock()
-
-    private static func prepareRunestoneLanguage(_ language: String) {
-        runestoneLanguagePreparationLock.lock()
-        defer {
-            runestoneLanguagePreparationLock.unlock()
-        }
-        switch language {
-        case "swift":
-            swiftRunestoneLanguage.prepare()
-        case "javascript":
-            javaScriptRunestoneLanguage.prepare()
-        case "json":
-            jsonRunestoneLanguage.prepare()
-        case "python":
-            pythonRunestoneLanguage.prepare()
-        default:
-            break
-        }
-    }
-}
-
-extension CodeBlockObjectView: @preconcurrency TextViewDelegate {
-    func textViewShouldBeginEditing(_ textView: TextView) -> Bool {
-        guard let presentation else { return false }
-        guard presentation.mode != .objectEditing else { return true }
-        activate()
-        return false
-    }
-
-    func textViewDidChange(_ textView: TextView) {
-        guard !isUpdatingState,
-              textView.markedTextRange == nil,
-              let presentation else {
-            return
-        }
-        onContentChange?(presentation.blockID, presentation.sourceReplacement(forEditedContent: textView.text))
     }
 }
 
