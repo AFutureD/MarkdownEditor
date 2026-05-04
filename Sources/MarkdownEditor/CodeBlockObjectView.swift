@@ -97,8 +97,11 @@ final class CodeBlockObjectView: UIControl, UITextFieldDelegate {
         )
     }
 
-    func focusEditor() {
-        _ = codeView.becomeFirstResponder()
+    override func becomeFirstResponder() -> Bool {
+        guard objectState?.mode == .objectEditing else { return false }
+        // The object view delegates responder ownership to the embedded editor;
+        // UIKit then hides the outer text view caret as part of normal handoff.
+        return codeView.becomeFirstResponder()
     }
 
     @objc private func activate() {

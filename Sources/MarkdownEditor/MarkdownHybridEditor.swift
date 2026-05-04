@@ -26,7 +26,6 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
     }
 
     private var isApplyingPresentation = false
-    private var isTransferringFocusToCodeBlock = false
     private var codeBlockViews: [String: CodeBlockObjectView] = [:]
 
     public init(coordinator: MarkdownEditorCoordinator) {
@@ -48,7 +47,6 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
         let needsTextUpdate = !textView.attributedText.isEqual(to: coordinator.presentation.attributedString)
         if !needsTextUpdate && selectedSourceOffset == nil {
             syncCodeBlockViews()
-            syncOuterTextViewCaretVisibility()
             return
         }
 
@@ -63,7 +61,6 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
                 }
                 let visibleOffset = outerSelectionVisibleOffset(forSourceOffset: currentSourceOffset)
                 textView.selectedRange = NSRange(location: min(visibleOffset, textView.attributedText.length), length: 0)
-                syncOuterTextViewCaretVisibility()
                 syncCodeBlockViews()
             }
         }
@@ -80,8 +77,6 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
         if coordinator.activeScope != .codeBlock(blockID) {
             _ = coordinator.activate(scope: .codeBlock(blockID), preservingSourceOffset: block.sourceRange.location)
             applyPresentation(selectedSourceOffset: block.sourceRange.location)
-        } else {
-            syncOuterTextViewCaretVisibility()
         }
 
         focusCodeBlockEditor(blockID: blockID)
@@ -99,7 +94,9 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
 
     public func textViewDidEndEditing(_ textView: UITextView) {
         guard textView === self.textView else { return }
-        guard !isTransferringFocusToCodeBlock else { return }
+        // A code block owns editing through its inner Runestone responder. When
+        // the outer text view resigns for that handoff, keep object editing active.
+        guard activeCodeBlockID == nil else { return }
         coordinator.deactivate()
         applyPresentation()
     }
@@ -270,15 +267,11 @@ private extension MarkdownHybridEditorView {
     }
 
     func focusCodeBlockEditor(blockID: String) {
-        isTransferringFocusToCodeBlock = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.preserveContentOffset {
                 self.ensureCodeBlockViewLoaded(blockID: blockID)
-                self.codeBlockViews[blockID]?.focusEditor()
-            }
-            DispatchQueue.main.async { [weak self] in
-                self?.isTransferringFocusToCodeBlock = false
+                _ = self.codeBlockViews[blockID]?.becomeFirstResponder()
             }
         }
     }
@@ -306,15 +299,6 @@ private extension MarkdownHybridEditorView {
             return activeCodeBlockPresentation.visibleRange.location
         }
         return coordinator.visibleOffset(forSourceOffset: sourceOffset)
-    }
-
-    func syncOuterTextViewCaretVisibility() {
-        if let activeCodeBlockPresentation,
-           textView.selectedRange.location < activeCodeBlockPresentation.visibleRange.upperBound {
-            textView.tintColor = .clear
-        } else {
-            textView.tintColor = tintColor
-        }
     }
 
     var activeCodeBlockPresentation: MarkdownCodeBlockPresentation? {
