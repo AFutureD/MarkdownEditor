@@ -53,7 +53,7 @@ public struct MarkdownBlockPresentation: Identifiable, Equatable {
     }
 }
 
-public struct MarkdownCodeBlockPresentation: Equatable {
+public struct MarkdownCodeBlockPresentation: Equatable, Sendable {
     public var blockID: String
     public var mode: MarkdownDisplayMode
     public var sourceRange: MarkdownSourceRange
@@ -748,12 +748,39 @@ private final class PresentationBuilder {
 }
 
 #if canImport(UIKit) || canImport(AppKit)
+enum MarkdownCodeBlockLayoutMetrics {
+    static func preferredHeight(for text: String, width: CGFloat) -> CGFloat {
+        let visualLineCount = wrappedLineCount(for: text, width: width)
+        let contentHeight = CGFloat(visualLineCount) * 20 + 16
+        return ceil(max(84, 36 + contentHeight))
+    }
+
+    private static func wrappedLineCount(for text: String, width: CGFloat) -> Int {
+        let insetWidth: CGFloat = 24
+        let availableWidth = max(40, width - insetWidth)
+        let characterWidth = max(
+            7,
+            NSString(string: "M").size(withAttributes: [
+                .font: PlatformFont.monospacedSystemFont(ofSize: 14, weight: .regular),
+            ]).width
+        )
+        let maxColumns = max(1, Int(floor(availableWidth / characterWidth)))
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        return max(1, lines.reduce(0) { count, line in
+            count + max(1, Int(ceil(Double(line.utf16.count) / Double(maxColumns))))
+        })
+    }
+}
+
 public final class MarkdownCodeBlockAttachment: NSTextAttachment {
     public private(set) var presentation: MarkdownCodeBlockPresentation?
 
     public init(presentation: MarkdownCodeBlockPresentation) {
         self.presentation = presentation
         super.init(data: nil, ofType: nil)
+        #if os(iOS)
+        allowsTextAttachmentView = false
+        #endif
         updateHeight(presentation.estimatedHeight)
     }
 
@@ -767,6 +794,27 @@ public final class MarkdownCodeBlockAttachment: NSTextAttachment {
             presentation.estimatedHeight = ceil(height)
             self.presentation = presentation
         }
+    }
+
+    public override func attachmentBounds(
+        for attributes: [NSAttributedString.Key: Any],
+        location: any NSTextLocation,
+        textContainer: NSTextContainer?,
+        proposedLineFragment: CGRect,
+        position: CGPoint
+    ) -> CGRect {
+        let height = presentation.map {
+            MarkdownCodeBlockLayoutMetrics.preferredHeight(
+                for: $0.codeContent,
+                width: proposedLineFragment.width
+            )
+        } ?? bounds.height
+        return CGRect(
+            x: 0,
+            y: 0,
+            width: max(1, proposedLineFragment.width),
+            height: max(1, height)
+        )
     }
 }
 #endif

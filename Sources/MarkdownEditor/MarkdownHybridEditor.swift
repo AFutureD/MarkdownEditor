@@ -86,6 +86,7 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
         isApplyingPresentation = true
         UIView.performWithoutAnimation {
             if needsTextUpdate {
+                configureCodeBlockAttachments(in: coordinator.presentation.attributedString)
                 textView.attributedText = coordinator.presentation.attributedString
             }
             let visibleOffset = outerSelectionVisibleOffset(forSourceOffset: currentSourceOffset)
@@ -100,7 +101,7 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.scrollRestoreGeneration == restoreGeneration else { return }
             self.restoreContentOffset(preservedContentOffset, when: true)
-            self.layoutCodeBlockViews()
+            self.syncCodeBlockViews()
         }
     }
 
@@ -136,13 +137,6 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
         guard !isTransferringFocusToCodeBlock else { return }
         coordinator.deactivate()
         applyPresentation()
-    }
-
-    public func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        // Scrolling changes which code-block attachments are near the viewport;
-        // refresh lazy-mounted object views without rebuilding the presentation.
-        guard scrollView === textView, !isApplyingPresentation else { return }
-        syncVisibleCodeBlockViews()
     }
 
     public func textView(
@@ -229,52 +223,50 @@ public final class MarkdownHybridEditorView: UIView, UITextViewDelegate {
 }
 
 private extension MarkdownHybridEditorView {
+    func configureCodeBlockAttachments(in attributedString: NSAttributedString) {
+        guard attributedString.length > 0 else { return }
+        attributedString.enumerateAttribute(
+            .attachment,
+            in: NSRange(location: 0, length: attributedString.length)
+        ) { value, _, _ in
+            guard let attachment = value as? MarkdownCodeBlockAttachment,
+                  let presentation = attachment.presentation else {
+                return
+            }
+            attachment.updateHeight(
+                MarkdownCodeBlockLayoutMetrics.preferredHeight(
+                    for: presentation.codeContent,
+                    width: codeBlockContentWidth
+                )
+            )
+        }
+    }
+
     func syncCodeBlockViews() {
         guard textView.attributedText.length == coordinator.presentation.attributedString.length else {
             return
         }
 
         let presentations = codeBlockPresentations
-
-        // Attachment heights still drive document layout when their object views
-        // are offscreen, so keep sizing separate from expensive view creation.
-        var needsLayout = false
-        for presentation in presentations {
-            needsLayout = updateAttachmentHeight(for: presentation) || needsLayout
-        }
-        if needsLayout {
-            textView.layoutIfNeeded()
-        }
-
-        syncVisibleCodeBlockViews(with: presentations)
-    }
-
-    // Runestone views are expensive to create and syntax-highlight. Keep them
-    // mounted only for visible blocks plus the active editor.
-    func syncVisibleCodeBlockViews(with presentations: [MarkdownCodeBlockPresentation]? = nil) {
-        guard textView.attributedText.length == coordinator.presentation.attributedString.length else {
-            return
-        }
-
-        let presentations = presentations ?? codeBlockPresentations
         let liveIDs = Set(presentations.map(\.blockID))
         for staleID in codeBlockViews.keys where !liveIDs.contains(staleID) {
             codeBlockViews.removeValue(forKey: staleID)?.removeFromSuperview()
         }
 
-        let visiblePresentations = visibleCodeBlockPresentations(in: presentations)
-        let visibleIDs = Set(visiblePresentations.map(\.blockID))
-        for (blockID, view) in codeBlockViews {
-            view.isHidden = !visibleIDs.contains(blockID)
-        }
-
-        for presentation in visiblePresentations {
+        for presentation in presentations {
+            guard let attachment = codeBlockAttachment(at: presentation.visibleRange.location) else { continue }
+            attachment.updateHeight(
+                MarkdownCodeBlockLayoutMetrics.preferredHeight(
+                    for: presentation.codeContent,
+                    width: codeBlockContentWidth
+                )
+            )
             let view = codeBlockViews[presentation.blockID] ?? makeCodeBlockView(for: presentation)
             view.isHidden = false
             view.update(presentation)
         }
 
-        layoutCodeBlockViews(presentations: visiblePresentations)
+        layoutCodeBlockViews(presentations: presentations)
     }
 
     func makeCodeBlockView(for presentation: MarkdownCodeBlockPresentation) -> CodeBlockObjectView {
@@ -300,66 +292,33 @@ private extension MarkdownHybridEditorView {
         return view
     }
 
-    func updateAttachmentHeight(for presentation: MarkdownCodeBlockPresentation) -> Bool {
-        guard let attachment = codeBlockAttachment(at: presentation.visibleRange.location) else { return false }
-        let targetHeight = CodeBlockObjectView.preferredHeight(for: presentation.codeContent, width: codeBlockContentWidth)
-        guard abs((attachment.bounds.height) - targetHeight) > 0.5 else { return false }
-
-        attachment.updateHeight(targetHeight)
-        textView.layoutManager.invalidateLayout(forCharacterRange: presentation.visibleRange, actualCharacterRange: nil)
-        textView.layoutManager.invalidateDisplay(forCharacterRange: presentation.visibleRange)
-        textView.setNeedsLayout()
-        return true
-    }
-
     func layoutCodeBlockViews(presentations: [MarkdownCodeBlockPresentation]? = nil) {
         guard textView.attributedText.length == coordinator.presentation.attributedString.length else {
             return
         }
 
-        textView.layoutManager.ensureLayout(for: textView.textContainer)
+        let presentations = presentations ?? codeBlockPresentations
         let width = codeBlockContentWidth
-        let presentations = presentations ?? visibleCodeBlockPresentations(in: codeBlockPresentations)
-
         for presentation in presentations {
             guard let view = codeBlockViews[presentation.blockID],
-                  presentation.visibleRange.location < textView.attributedText.length else {
+                  let rect = codeBlockFrame(for: presentation, width: width) else {
                 continue
             }
-            let glyphRange = textView.layoutManager.glyphRange(
-                forCharacterRange: presentation.visibleRange,
-                actualCharacterRange: nil
-            )
-            var rect = textView.layoutManager.boundingRect(
-                forGlyphRange: glyphRange,
-                in: textView.textContainer
-            )
-            rect.origin.x = textView.textContainerInset.left
-            rect.origin.y += textView.textContainerInset.top
-            rect.size.width = width
-            rect.size.height = max(CodeBlockObjectView.preferredHeight(for: presentation.codeContent, width: width), rect.height)
             view.frame = rect.integral
             textView.bringSubviewToFront(view)
         }
     }
 
     func scrollCodeBlockToVisible(blockID: String) {
-        if let presentation = codeBlockPresentation(blockID: blockID) {
-            let view = codeBlockViews[presentation.blockID] ?? makeCodeBlockView(for: presentation)
-            view.isHidden = false
-            view.update(presentation)
-            if updateAttachmentHeight(for: presentation) {
-                textView.layoutIfNeeded()
-            }
-            layoutCodeBlockViews(presentations: [presentation])
+        guard let presentation = codeBlockPresentation(blockID: blockID) else { return }
+        layoutCodeBlockViews(presentations: [presentation])
+        if let view = codeBlockViews[blockID] {
+            textView.scrollRectToVisible(view.frame.insetBy(dx: 0, dy: -12), animated: false)
         } else {
-            layoutCodeBlockViews()
+            textView.scrollRangeToVisible(presentation.visibleRange)
         }
-        guard let view = codeBlockViews[blockID] else { return }
-
-        let targetRect = view.frame.insetBy(dx: 0, dy: -12)
-        textView.scrollRectToVisible(targetRect, animated: false)
-        layoutCodeBlockViews(presentations: visibleCodeBlockPresentations(in: codeBlockPresentations))
+        textView.layoutIfNeeded()
+        syncCodeBlockViews()
     }
 
     func focusCodeBlockEditor(blockID: String, scrollIntoView: Bool) {
@@ -369,11 +328,19 @@ private extension MarkdownHybridEditorView {
             if scrollIntoView {
                 self.scrollCodeBlockToVisible(blockID: blockID)
             }
+            self.ensureCodeBlockViewLoaded(blockID: blockID)
             self.codeBlockViews[blockID]?.focusEditor()
             DispatchQueue.main.async { [weak self] in
                 self?.isTransferringFocusToCodeBlock = false
             }
         }
+    }
+
+    func ensureCodeBlockViewLoaded(blockID: String) {
+        guard let presentation = codeBlockPresentation(blockID: blockID) else { return }
+        syncCodeBlockViews()
+        ensureTextLayout(for: presentation.visibleRange)
+        textView.layoutIfNeeded()
     }
 
     func visibleRangeIntersectsCodeBlock(_ range: NSRange) -> Bool {
@@ -431,31 +398,56 @@ private extension MarkdownHybridEditorView {
         return max(1, textView.bounds.width - inset.left - inset.right)
     }
 
-    func visibleCodeBlockPresentations(in presentations: [MarkdownCodeBlockPresentation]) -> [MarkdownCodeBlockPresentation] {
-        guard textView.bounds.height > 0,
-              textView.attributedText.length > 0 else {
-            return presentations
+    func ensureTextLayout(for visibleRange: NSRange) {
+        guard let textLayoutManager = textView.textLayoutManager,
+              let textRange = textRange(forVisibleRange: visibleRange, in: textLayoutManager) else {
+            return
+        }
+        textLayoutManager.ensureLayout(for: textRange)
+        textLayoutManager.textViewportLayoutController.layoutViewport()
+    }
+
+    func codeBlockFrame(for presentation: MarkdownCodeBlockPresentation, width: CGFloat) -> CGRect? {
+        guard presentation.visibleRange.location < textView.attributedText.length,
+              let textLayoutManager = textView.textLayoutManager,
+              let location = textLocation(forVisibleOffset: presentation.visibleRange.location, in: textLayoutManager) else {
+            return nil
         }
 
-        let textContainer = textView.textContainer
-        textView.layoutManager.ensureLayout(for: textContainer)
-
-        var visibleRect = CGRect(origin: textView.contentOffset, size: textView.bounds.size)
-        visibleRect.origin.x -= textView.textContainerInset.left
-        visibleRect.origin.y -= textView.textContainerInset.top
-        // Use one extra viewport as a buffer so fast scrolling does not create
-        // views exactly when a code block crosses the visible edge.
-        visibleRect = visibleRect.insetBy(dx: 0, dy: -textView.bounds.height)
-
-        let glyphRange = textView.layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
-        let characterRange = textView.layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
-        let activeBlockID = activeCodeBlockID
-
-        return presentations.filter { presentation in
-            presentation.blockID == activeBlockID
-                || NSIntersectionRange(characterRange, presentation.visibleRange).length > 0
-                || characterRange.location == presentation.visibleRange.location
+        ensureTextLayout(for: presentation.visibleRange)
+        guard let layoutFragment = textLayoutManager.textLayoutFragment(for: location) else {
+            return nil
         }
+
+        let attachmentFrame = layoutFragment.frameForTextAttachment(at: location)
+        let fragmentFrame = layoutFragment.layoutFragmentFrame
+        let yOffset = attachmentFrame == .zero ? 0 : attachmentFrame.minY
+        let height = max(
+            MarkdownCodeBlockLayoutMetrics.preferredHeight(for: presentation.codeContent, width: width),
+            attachmentFrame.height,
+            fragmentFrame.height
+        )
+        return CGRect(
+            x: textView.textContainerInset.left,
+            y: textView.textContainerInset.top + fragmentFrame.minY + yOffset,
+            width: width,
+            height: height
+        )
+    }
+
+    func textRange(forVisibleRange visibleRange: NSRange, in textLayoutManager: NSTextLayoutManager) -> NSTextRange? {
+        guard let start = textLocation(forVisibleOffset: visibleRange.location, in: textLayoutManager),
+              let end = textLayoutManager.location(start, offsetBy: visibleRange.length) else {
+            return nil
+        }
+        return NSTextRange(location: start, end: end)
+    }
+
+    func textLocation(
+        forVisibleOffset visibleOffset: Int,
+        in textLayoutManager: NSTextLayoutManager
+    ) -> (any NSTextLocation)? {
+        textLayoutManager.location(textLayoutManager.documentRange.location, offsetBy: visibleOffset)
     }
 }
 
@@ -513,12 +505,6 @@ private final class CodeBlockObjectView: UIControl, UITextFieldDelegate {
         setActiveAppearance(isEditing)
         isUpdatingState = false
         setNeedsLayout()
-    }
-
-    static func preferredHeight(for text: String, width: CGFloat) -> CGFloat {
-        let visualLineCount = wrappedLineCount(for: text, width: width)
-        let contentHeight = CGFloat(visualLineCount) * 20 + 16
-        return ceil(max(84, 36 + contentHeight))
     }
 
     override func layoutSubviews() {
@@ -655,17 +641,6 @@ private final class CodeBlockObjectView: UIControl, UITextFieldDelegate {
         CATransaction.setDisableActions(true)
         layer.borderColor = isActive ? UIColor.systemBlue.cgColor : UIColor.separator.cgColor
         CATransaction.commit()
-    }
-
-    private static func wrappedLineCount(for text: String, width: CGFloat) -> Int {
-        let insetWidth: CGFloat = 24
-        let availableWidth = max(40, width - insetWidth)
-        let characterWidth = max(7, "M".size(withAttributes: [.font: UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)]).width)
-        let maxColumns = max(1, Int(floor(availableWidth / characterWidth)))
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        return max(1, lines.reduce(0) { count, line in
-            count + max(1, Int(ceil(Double(line.utf16.count) / Double(maxColumns))))
-        })
     }
 
     private func runestoneLanguageIdentifier(
